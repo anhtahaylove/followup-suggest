@@ -28,9 +28,10 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
   on('command.list', () => ({ value: seen.commands ?? [] }))
   on('store.delete', (_api: unknown, e: { key: string }) => { delete seen.store[e.key]; return { value: undefined } })
   on('fs.exists',(_api: unknown, e: { path: string }) => {
-    // On Windows the host resolves a POSIX path against the current drive (C:\home\...); compare without the drive.
+    // The host resolves the path first: on Windows a POSIX path lands on the current drive (C:\home\...), on Linux a
+    // Windows path is relative and lands under the working directory (/home/runner/.../C:/nope/...).
     const p = String(e.path).replace(/\\/g, '/')
-    return { value: !(seen.missing || []).some((m) => p === m || p.endsWith(':' + m)) }
+    return { value: !(seen.missing || []).some((m) => p === m || p.endsWith(':' + m) || p.endsWith('/' + m)) }
   })
   on('model.fork', async (_api: unknown, e: { prompt: string }) => {
     if (seen.forkGate) await seen.forkGate

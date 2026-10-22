@@ -1,0 +1,15 @@
+{
+  "name": "followup-suggest",
+  "description": "Single-plugin marketplace for followup-suggest, a Claude Code mod that suggests follow-up prompts.",
+  "owner": { "name": "anhtahaylove", "url": "https://github.com/anhtahaylove" },
+  "plugins": [
+    {
+      "name": "followup-suggest",
+      "source": "./",
+      "description": "Clickable follow-up prompt suggestions above the Claude Code input box.",
+      "version": "2.0.0",
+      "homepage": "https://github.com/anhtahaylove/followup-suggest",
+      "license": "MIT"
+    }
+  ]
+}

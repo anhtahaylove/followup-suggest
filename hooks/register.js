@@ -168,11 +168,11 @@ const DANGEROUS = new RegExp([
 const DANGEROUS_CASED = /\bDELETE\s+FROM\b/
 
 // git branch force-deletes an unmerged branch with -D, -d -f, -df/-fd or --delete --force, also after global options
-// (git -C repo branch -D, git --git-dir=/r branch -D). Plain -d refuses to. Every git branch command in the row is checked;
+// (git -C repo branch -D, git -C "my repo" branch -D, git --git-dir=/r branch -D). Plain -d refuses to. Every git branch command in the row is checked;
 // in each, only the options before the second word that is not an option, or before the end of a clause, count, so
 // "git branch -a, then gcc -D DEBUG" is kept. The rest of the line is read in a look-ahead, so the next match can start
 // inside it.
-const GIT_BRANCH = /\bgit(?:\s+-{1,2}[\w-]+(?:=\S*)?(?:\s+(?!branch\b)[^-\s]\S*)?)*\s+branch\b(?=([^\n]*))/g
+const GIT_BRANCH = /\bgit(?:\s+-{1,2}[\w-]+(?:=(?:"[^"]*"|'[^']*'|\S*))?(?:\s+(?!branch\b)(?:"[^"]*"|'[^']*'|[^-\s]\S*))?)*\s+branch\b(?=([^\n]*))/g
 function forceDeletesBranch(text) {
   for (const m of String(text).matchAll(GIT_BRANCH)) {
     const opts = []
@@ -286,6 +286,12 @@ async function dropMissingPaths($, items) {
         if (!target) continue
         let exists = true
         try { exists = await $.fs.exists(target) } catch (err) { exists = true }
+        // A POSIX-looking text whose first two segments do not exist either (/home/settings/profile, /v/1/users) is a
+        // route, not a file that went missing: keep the row.
+        if (!exists && p.startsWith("/")) {
+          const anchor = existsTarget(p.split("/").slice(0, 3).join("/"))
+          try { if (!(await $.fs.exists(anchor))) exists = true } catch (err) { exists = true }
+        }
         if (!exists) { ok = false; break }
       }
     }

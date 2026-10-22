@@ -1186,7 +1186,9 @@ test('force branch deletes are marked in every spelling, safe ones are not', () 
     // Every git command in the row counts, not only the first.
     'Run git branch -a, then git branch -D x', 'Run git branch -vv; git branch -D x',
     // Global options written as --name=value.
-    'Run git --git-dir=/r/x branch -D y', 'Run git --work-tree=C:/r branch -D y']) {
+    'Run git --git-dir=/r/x branch -D y', 'Run git --work-tree=C:/r branch -D y',
+    // A quoted option value with spaces.
+    'Run git -C "C:/my repo" branch -D old-parser', "Run git -C '/home/me/my repo' branch -D x"]) {
     expect(isRisky(t)).toBe(true)
   }
   for (const t of ['Run git branch -d feature/x after the merge', 'Run git branch -a, then build with gcc -D DEBUG', 'Run git -C repo branch -d x']) {
@@ -1277,6 +1279,18 @@ test('fix 5: a VERIFY row naming a missing POSIX path is dropped', async ($, on)
   const b = await band($)
   expect(b).toContain('/home/me/app/parser.ts')
   expect(b).not.toContain('missing.ts')
+})
+
+test('a three-segment route is not dropped as a missing path when its first two segments do not exist either', async ($, on) => {
+  const seen = fresh()
+  seen.missing = ['/home/settings/profile', '/home/settings', 'V:/1/users', 'V:/1', '/home/me/app/gone.ts']
+  stubs(on, 'VERIFY: Open /home/settings/profile and check the Save button\nVERIFY: Call /v/1/users and check the list\nVERIFY: Read back /home/me/app/gone.ts', null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).toContain('/home/settings/profile')
+  expect(b).toContain('/v/1/users')
+  expect(b).not.toContain('gone.ts')
 })
 
 test('a check mark goes away as soon as its text leaves the input box (cleared or edited away)', async ($, on) => {

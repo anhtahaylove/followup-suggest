@@ -2,6 +2,14 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.3 (2026-10-22)
+
+- A force branch delete is marked when a global option has a quoted value with spaces
+  (`git -C "C:/my repo" branch -D x`).
+- A verify row naming a three-segment route (`/home/settings/profile`, `/v/1/users`) is no longer dropped as a missing
+  file: a POSIX path only counts as missing when its first two segments exist.
+- README: a screenshot of the band.
+
 ## 2.0.2 (2026-10-22)
 
 - Sent rows are recorded as sent again. Since 2.0.0 every row in `/fu log` showed as unused and the folded line read

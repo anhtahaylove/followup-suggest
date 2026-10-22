@@ -4,6 +4,8 @@ A [Claude Code](https://code.claude.com) mod that suggests what to ask next. Aft
 follow-up prompts in a band right above the input box. Click a row to add that prompt to your draft, review it, press
 Enter. Nothing is ever sent for you.
 
+![The band above the input box: four suggestions, the last one marked as risky](docs/band.png)
+
 ```
 ↳ Suggested next — click a row to add it to the input box (several = do them together)
   1. [verify] ★ Run the tests for the parser change in /home/me/app/src/parser.ts

@@ -370,6 +370,51 @@ export function dropOffTopic(items, latest) {
   })
 }
 
+// ---- Already checked in this turn (2.0.4) ------------------------------------------------------------------------
+// Most "read back X and confirm" rows came right after the agent had read X back itself. The mod watches the main
+// loop's tool calls of the current turn: a Read of a file, or a Bash/PowerShell command naming a file, counts as a check
+// of that file until an Edit, Write or NotebookEdit of it later in the turn. A VERIFY row is dropped when every path it
+// names was checked. A row that asks to run or test something needs a command naming the file; a Read is not enough.
+// A directory named in a command (cd, a test root) is not a check of what is in it.
+const MAX_TURN_CHECKS = 300
+const WRITE_TOOLS = { Edit: "file_path", Write: "file_path", NotebookEdit: "notebook_path" }
+const RUN_WORDS = /\b(re-?run|run|tests?|execute|build|lint|typecheck|compile)\b|chạy|kiểm thử|biên dịch/u
+const PATH_CHAR = /[\w./~-]/
+let turnChecks = [] // { read: path } | { run: command }, normalized, main loop of the current turn only
+
+const normPath = (p) => existsTarget(p).replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "")
+const normCommand = (c) => String(c).slice(0, 4000).replace(/\\/g, "/").toLowerCase().replace(/(^|[\s"'=(])\/([a-z])\//g, "$1$2:/")
+const isFileName = (p) => /\.[\w-]+$/.test(p.split("/").pop())
+
+// `p` appears in `hay` as a whole path, not as the start of a longer one (a.ts in a.ts.bak).
+function mentions(hay, p) {
+  for (let i = hay.indexOf(p); i >= 0; i = hay.indexOf(p, i + 1)) {
+    if (!PATH_CHAR.test(hay[i - 1] || "") && !PATH_CHAR.test(hay[i + p.length] || "")) return true
+  }
+  return false
+}
+
+function noteToolCall(e) {
+  if (e.tool === "Read" && typeof e.file_path === "string") turnChecks.push({ read: normPath(e.file_path) })
+  else if ((e.tool === "Bash" || e.tool === "PowerShell") && typeof e.command === "string") turnChecks.push({ run: normCommand(e.command) })
+  else if (WRITE_TOOLS[e.tool] && typeof e[WRITE_TOOLS[e.tool]] === "string") {
+    const p = normPath(e[WRITE_TOOLS[e.tool]])
+    turnChecks = turnChecks.filter((c) => c.read !== p && !(c.run && mentions(c.run, p)))
+  }
+  if (turnChecks.length > MAX_TURN_CHECKS) turnChecks.shift()
+}
+
+export function dropAlreadyChecked(items, checks) {
+  if (!checks || !checks.length) return items
+  return items.filter((item) => {
+    if (item.tag !== "VERIFY") return true
+    const paths = extractPaths(item.text).filter((p) => existsTarget(p)).map(normPath)
+    if (!paths.length) return true
+    const runs = RUN_WORDS.test(withoutPaths(item.text).toLowerCase())
+    return !paths.every((p) => checks.some((c) => (c.read === p && !runs) || (c.run && isFileName(p) && mentions(c.run, p))))
+  })
+}
+
 // ---- Skills and slash commands of the session (v1.6) -------------------------------------------------------------------
 // `$.command.list()` is the full set as the typeahead has it, including commands only the person can run. A suggestion can
 // then be "/skill arguments" instead of prose. Idea from the community plugin next-steps; the selection below is this mod's
@@ -954,6 +999,7 @@ export function register(on, options) {
     return next(e)
   })
   on("turn.start", async ($, e, next) => {
+    if (!e.agentId) turnChecks = []
     const auto = autoTurn
     autoTurn = false
     if (auto) return next(e)
@@ -961,6 +1007,14 @@ export function register(on, options) {
     try { await ensureLoaded($) } catch (err) { /* ignore */ }
     try { await clear($, true) } catch (err) { /* ignore */ }
     return next(e)
+  })
+
+  // Observes the main loop's tool calls (reads, commands, edits) so a VERIFY row can be checked against them. The call
+  // and its result pass through untouched; only a call that ran without error is noted.
+  on("tool.call", async ($, e, next) => {
+    const r = await next(e)
+    try { if (!e.agentId && r && !r.deny && !r.isError) noteToolCall(e) } catch (err) { /* observing only */ }
+    return r
   })
 
   // Keystrokes arrive as prompt.edit, everything else that rewrites the box (a clear, history, a fill) as prompt.change.
@@ -1117,6 +1171,7 @@ export function register(on, options) {
     const afterTune = items.length
     items = await dropMissingPaths($, items)
     const afterPaths = items.length
+    items = dropAlreadyChecked(items, turnChecks)
     items = dropCoveredByAnswer(items, answer)
     items = dropForbidden(items, forbiddenVerbs(recentUser.join("\n")))
     items = dropOffTopic(items, latest)

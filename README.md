@@ -34,6 +34,10 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
     "không push") is dropped;
   - a verify row naming a file path that does not exist is dropped (a path stops at the first space, so paths with
     spaces are not checked reliably);
+  - a verify row is dropped when the turn that just finished already checked every file it names: a Read of the file,
+    or a Bash or PowerShell command naming it, after the last edit of that file in the turn. A row asking to run or test
+    something needs such a command; a Read is not enough. Directories, subagents' tool calls and earlier turns do not
+    count;
   - a next or handoff row naming a file that your latest request does not mention is dropped as off-topic;
   - a row that repeats at least 80% of the words of one list item of the answer is dropped (rows under 4 words are kept);
   - a `/command` row is kept only if the session has that command.
@@ -140,7 +144,7 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
 - See the raw menu: run `FOLLOWUP_SUGGEST_DEBUG=1 claude -p "..." --output-format stream-json --verbose`. The mod adds a
   `[debug]` line with the first 700 characters of the model output and row counts after each stage: `parsed` (after the
   cleaning, length and danger checks), `tune` (after hidden tags), `paths` (after the missing-path check) and `final`
-  (after the repeat, forbidden-action, off-topic and command checks and the row limit). `skills` is the number of
+  (after the already-checked, repeat, forbidden-action, off-topic and command checks and the row limit). `skills` is the number of
   commands described to the model. Turns that end before the model call (short answer, mod off) print no line.
 - The reply to `/fu` starts with `followup-suggest+ponytail:` (or another name after the `+`): Claude Code labels the
   reply with every mod it ran together with this one. The text after the colon is this mod's own; nothing is wrong.

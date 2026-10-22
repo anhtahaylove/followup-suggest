@@ -2,6 +2,15 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.1 (2026-10-22)
+
+- Notifications, scheduled prompts and messages from other sessions no longer count as your prompts: they do not
+  switch the UI language (an English "Background command … completed" notice turned a Vietnamese band English), do not
+  take a slot among the recent prompts used to respect what you forbade, and the band stays on screen through the
+  turn they start. If that turn writes a new menu, the old one goes into `/fu log`.
+- A one-row menu in the input box reads "The suggestion is in the input box" instead of "All 1 suggestions are …".
+- CI test stub matches paths the way a Linux host resolves them.
+
 ## 2.0.0 (2026-10-22)
 
 - English and Vietnamese UI. English is the default; `auto` follows the language of your latest prompt and remembers it

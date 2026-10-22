@@ -1,6 +1,6 @@
 {
   "name": "followup-suggest",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Suggests 0-5 follow-up prompts after a substantial answer and shows them as a clickable band above the input box. Click a row to add it to your draft; nothing is sent for you. English and Vietnamese UI.",
   "author": { "name": "anhtahaylove", "url": "https://github.com/anhtahaylove" },
   "homepage": "https://github.com/anhtahaylove/followup-suggest",

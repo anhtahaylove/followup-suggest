@@ -943,6 +943,53 @@ test('i18n: a Vietnamese prompt updates the remembered language', async ($, on) 
   expect(seen.store['lastLang']).toBe('en')
 })
 
+test('i18n: an English background-task notification does not change the remembered language', async ($, on) => {
+  // Seen in real use: a "Background command ... completed" notification arrives as prompt.submit and flipped a
+  // Vietnamese user's band to English.
+  const seen = blank()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.prompt.submit({ text: 'Kiểm tra lại giúp tôi', origin: { kind: 'composer' } })
+  expect(seen.store['lastLang']).toBe('vi')
+  const recent = () => (seen.store['band:test-session'] as { recentUser?: string[] } | undefined)?.recentUser ?? []
+  expect(recent()).toContain('Kiểm tra lại giúp tôi')
+  const note = 'Background command "Wait for the CI run" completed (exit code 0)'
+  await $.prompt.submit({ text: note, isMeta: true, origin: { kind: 'task-notification' } })
+  // One diff for both effects: the remembered language, and the recent prompts used to respect what the user forbade.
+  expect({ lastLang: seen.store['lastLang'], notificationInRecent: recent().includes(note) })
+    .toEqual({ lastLang: 'vi', notificationInRecent: false })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(await band($)).toContain('Gợi ý tiếp theo')
+})
+
+test('i18n: a one-row menu that is in the input box reads as one suggestion in English', async ($, on) => {
+  const seen = blank()
+  stubs(on, 'VERIFY: Run the tests for this change', null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '1' })
+  const b = await band($)
+  expect(b).toContain('The suggestion is in the input box')
+  expect(b).not.toContain('All 1 suggestions')
+})
+
+test('a notification turn keeps the band on screen; a menu it writes moves the old one into the history', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.prompt.submit({ text: 'Background command "build" completed (exit code 0)', isMeta: true, origin: { kind: 'task-notification' } })
+  await $.turn.start({ turnId: 't-note' })
+  let b = await band($)
+  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại toàn bộ test')
+  expect(b).not.toContain('Gợi ý đã đưa')
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const r: any = await $.command.run({ command: 'fu', args: 'log' })
+  expect(r?.text ?? '').not.toContain('chưa có gợi ý nào')
+  b = await band($)
+  expect(b).toContain('gửi 0/3')
+})
+
 test('i18n: English replies for /fu commands and stats', async ($, on) => {
   const seen = blank()
   stubs(on, THREE, null, seen)

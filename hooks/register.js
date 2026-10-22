@@ -41,7 +41,7 @@ export const STRINGS = {
     tags: { VERIFY: "verify", NEXT: "next", HANDOFF: "handoff", INPUT: "needs input" },
     header: "↳ Suggested next — click a row to add it to the input box (several = do them together)",
     headerRestored: (age) => "↳ Suggestions from last time, " + age + " — click a row to add it to the input box",
-    headerAllDone: (n) => "↳ All " + n + " suggestions are in the input box · /fu off to switch off",
+    headerAllDone: (n) => (n === 1 ? "↳ The suggestion is" : "↳ All " + n + " suggestions are") + " in the input box · /fu off to switch off",
     folded: (n) => "↳ Suggestions hidden (" + n + ") — click to show · /fu show · /fu off to switch off",
     insertAll: (n) => "  ⏎ Insert all " + n + " (do them together)",
     insertRest: (n) => "  ⏎ Insert the " + n + " remaining (do them together)",
@@ -518,6 +518,7 @@ let attendedCache = null
 // Bumped whenever the user moves on (prompt sent, new turn) or switches the mod off. A menu is generated in the background
 // and can take seconds; if the epoch changed meanwhile, its result belongs to a conversation state that is gone.
 let epoch = 0
+let autoTurn = false // the next turn was started by a notification or another non-typed prompt, not by the user
 
 // Helpers take `$` as an argument; the mods validator only allows that for top-level function declarations.
 async function redraw($) {
@@ -917,8 +918,15 @@ export function register(on, options) {
   // New prompt or new turn: yesterday's suggestions must not linger above the input box.
   on("prompt.submit", async ($, e, next) => {
     // A failure here must never block the user's prompt.
-    if (!e.command) epoch += 1 // a slash command (/fu stats, /model ...) is not 'moving on': a pending menu stays valid
     try { await ensureLoaded($) } catch (err) { /* ignore */ }
+    // A notification, a scheduled prompt or a peer's message is not the user moving on: it neither teaches the language
+    // nor counts as a recent prompt, and the band stays on screen through the turn it starts. No origin = older engine.
+    if (!e.command && (e.isMeta || (e.origin && e.origin.kind !== "composer" && e.origin.kind !== "bridge"))) {
+      autoTurn = true
+      return next(e)
+    }
+    autoTurn = false
+    if (!e.command) epoch += 1 // a slash command (/fu stats, /model ...) is not 'moving on': a pending menu stays valid
     // While the mod is off it keeps nothing of what you type.
     try { if (!e.command && enabled) rememberUserText(e.text) } catch (err) { /* ignore */ }
     try {
@@ -934,6 +942,9 @@ export function register(on, options) {
     return next(e)
   })
   on("turn.start", async ($, e, next) => {
+    const auto = autoTurn
+    autoTurn = false
+    if (auto) return next(e)
     epoch += 1
     try { await ensureLoaded($) } catch (err) { /* ignore */ }
     try { await clear($, true) } catch (err) { /* ignore */ }
@@ -1098,6 +1109,8 @@ export function register(on, options) {
     items = dropForbidden(items, forbiddenVerbs(recentUser.join("\n")))
     items = dropOffTopic(items, latest)
     items = dropUnknownCommands(items, known)
+    // A notification turn kept the previous menu on screen: it goes into the history before the new one replaces it.
+    archiveCurrent()
     last = items.slice(0, tuning.maxItems)
     used = new Set()
     collapsed = false

@@ -490,6 +490,9 @@ export function pickIndexes(args, count) {
 // is switched on. Module scope so the top-level helpers below can reach them.
 let last = []
 let used = new Set()
+// Rows of this menu whose check mark left with the box text. Sending empties the box (prompt.change) before
+// prompt.submit runs, so the history still needs to know they were inserted.
+let dropped = new Set()
 let enabled = true
 // "Hide" folds the band into one dim line instead of throwing the menu away, so a mis-click is undoable
 // (click the line or /fu show). A new turn replaces the menu anyway, so `collapsed` never outlives it.
@@ -575,6 +578,7 @@ async function syncMarks($, text) {
   const draft = normText(text)
   const kept = new Set([...used].filter((i) => last[i] && inDraft(draft, last[i])))
   if (kept.size === used.size) return
+  for (const i of used) if (!kept.has(i)) dropped.add(i)
   used = kept
   await persist($)
   await redraw($)
@@ -628,7 +632,7 @@ function archiveCurrent(submitted) {
   const items = last.map((it, i) => ({
     tag: it.tag,
     text: it.text,
-    state: !used.has(i) ? "unused" : (sub && sub.includes(norm(it.text).slice(0, 40)) ? "sent" : "inserted"),
+    state: !used.has(i) && !dropped.has(i) ? "unused" : (sub && sub.includes(norm(it.text).slice(0, 40)) ? "sent" : "inserted"),
   }))
   history.push({ at: Date.now(), items })
   while (history.length > MAX_HISTORY) history.shift()
@@ -639,6 +643,7 @@ async function clear($, archive, submitted) {
   if (archive) archiveCurrent(submitted)
   last = []
   used = new Set()
+  dropped = new Set()
   collapsed = false
   menuAt = 0
   restored = false
@@ -879,6 +884,7 @@ export function register(on, options) {
       } catch (err) { /* whatever could be deleted is gone */ }
       last = []
       used = new Set()
+      dropped = new Set()
       collapsed = false
       history = []
       recentUser = []
@@ -1113,6 +1119,7 @@ export function register(on, options) {
     archiveCurrent()
     last = items.slice(0, tuning.maxItems)
     used = new Set()
+    dropped = new Set()
     collapsed = false
     menuAt = Date.now()
     restored = false

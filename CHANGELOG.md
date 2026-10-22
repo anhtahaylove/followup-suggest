@@ -2,6 +2,12 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.2 (2026-10-22)
+
+- Sent rows are recorded as sent again. Since 2.0.0 every row in `/fu log` showed as unused and the folded line read
+  "sent 0/N": sending empties the input box first, which took the check marks away before the menu was archived. A row
+  that was inserted and then cleared from the box without being sent now shows as inserted.
+
 ## 2.0.1 (2026-10-22)
 
 - Notifications, scheduled prompts and messages from other sessions no longer count as your prompts: they do not

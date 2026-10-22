@@ -182,6 +182,40 @@ test('a row that was inserted but edited before sending is marked inserted, not 
   expect(b).toContain('gửi 0/3')
 })
 
+test('sending clears the box before prompt.submit runs: the inserted row still counts as sent', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '2' })
+  // Real order seen in a --debug-file log on Enter: the box clear (prompt.change, empty) starts ~19 ms before prompt.submit.
+  seen.draft = ''
+  await $.prompt.change({ text: '', cursor: 0, origin: { kind: 'clear' } })
+  await $.prompt.submit({ text: 'Xem diff của file cấu hình' })
+  let b = await band($)
+  expect(b).toContain('gửi 1/3')
+  await $.command.run({ command: 'fu', args: 'log' })
+  b = await band($)
+  expect(b).toContain('➤ 2. [bước tiếp] Xem diff')
+  expect(b).toContain('· 1. [kiểm chứng] Chạy lại toàn bộ test')
+})
+
+test('a row cleared from the box and then not sent is marked inserted, not sent', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '1' })
+  seen.draft = ''
+  await $.prompt.change({ text: '', cursor: 0, origin: { kind: 'clear' } })
+  expect(await band($)).not.toContain('✓')
+  await $.prompt.submit({ text: 'một câu hoàn toàn khác' })
+  await $.command.run({ command: 'fu', args: 'log' })
+  const b = await band($)
+  expect(b).toContain('✎ 1. [kiểm chứng]')
+  expect(b).toContain('gửi 0/3')
+})
+
 test('a menu replaced by a new turn without a submitted prompt is kept in the history too', async ($, on) => {
   const seen = fresh()
   stubs(on, THREE, null, seen)

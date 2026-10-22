@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeTuning, extractPaths, dropCoveredByAnswer, answerListLines, forbiddenVerbs, dropForbidden, dropOffTopic, STRINGS, detectLang, parseLine, cleanLine, existsTarget, isRisky } from '../hooks/register.js'
+import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeTuning, extractPaths, dropCoveredByAnswer, answerListLines, forbiddenVerbs, dropForbidden, dropOffTopic, STRINGS, detectLang, parseLine, cleanLine, existsTarget, isRisky, dropAlreadyChecked } from '../hooks/register.js'
 
 type Seen = {
   forkCalls: number; haikuCalls: number; draft: string; fills: string[]; attended?: string; forkThrows?: boolean
@@ -52,6 +52,7 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
   // The editor's answer to a keystroke, and core's echo of a box change: both report the draft as it now stands.
   on('prompt.edit', () => ({ text: seen.draft, cursor: seen.draft.length }))
   on('prompt.change', (_api: unknown, e: { text: string }) => ({ text: e.text }))
+  on('tool.call', () => ({ result: {}, text: 'ok' }))
   on('prompt.fill', (_api: unknown, e: { text: string; mode?: string }) => {
     seen.draft = e.mode === 'append' ? seen.draft + e.text : e.text
     seen.fills.push(e.text)
@@ -1344,4 +1345,69 @@ test('the history panel marks a risky row with a warning too', async ($, on) => 
   const b = await band($)
   expect(b).toContain('· 1. [bước tiếp] ⚠ Chạy git push --force')
   expect(b).toContain('· 2. [kiểm chứng] Chạy lại toàn bộ test')
+})
+
+test('a VERIFY row about a path the turn already read back is dropped; unread paths and NEXT rows are kept', async ($, on) => {
+  const seen = fresh()
+  stubs(on, 'VERIFY: Read back C:/Users/me/app/config.json and confirm the port\nVERIFY: Read back C:/Users/me/app/other.json\nNEXT: Add a comment to C:/Users/me/app/config.json', null, seen)
+  await start($)
+  await $.prompt.submit({ text: 'set the port in C:/Users/me/app/config.json' })
+  await $.turn.start({ turnId: 't1' })
+  await $.tool.call({ tool: 'Edit', file_path: 'C:\\Users\\me\\app\\config.json', old_string: 'a', new_string: 'b' })
+  await $.tool.call({ tool: 'Read', file_path: 'C:\\Users\\me\\app\\config.json' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).not.toContain('confirm the port')
+  expect(b).toContain('1. [kiểm chứng] ★ Read back C:/Users/me/app/other.json')
+  expect(b).toContain('2. [bước tiếp] Add a comment to C:/Users/me/app/config.json')
+})
+
+test('a read before the last edit of that file, a read in an earlier turn or in a subagent does not count', async ($, on) => {
+  const seen = fresh()
+  stubs(on, 'VERIFY: Read back C:/Users/me/app/a.ts\nVERIFY: Read back C:/Users/me/app/b.ts\nVERIFY: Read back C:/Users/me/app/c.ts', null, seen)
+  await start($)
+  await $.turn.start({ turnId: 't1' })
+  await $.tool.call({ tool: 'Read', file_path: 'C:/Users/me/app/b.ts' })
+  await $.turn.start({ turnId: 't2' })
+  await $.tool.call({ tool: 'Read', file_path: 'C:/Users/me/app/a.ts' })
+  await $.tool.call({ tool: 'Write', file_path: 'C:/Users/me/app/a.ts', content: 'x' })
+  await $.tool.call({ tool: 'Read', file_path: 'C:/Users/me/app/c.ts', agentId: 'sub-1' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).toContain('Read back C:/Users/me/app/a.ts')
+  expect(b).toContain('Read back C:/Users/me/app/b.ts')
+  expect(b).toContain('Read back C:/Users/me/app/c.ts')
+})
+
+test('a shell command naming the file counts as checking it; a row asking to run something needs that, a Read is not enough', async ($, on) => {
+  const seen = fresh()
+  stubs(on, 'VERIFY: Run the tests in /home/me/app/src/parser.test.ts\nVERIFY: Đọc lại /home/me/app/src/out.log để xác nhận\nVERIFY: Run the tests for /home/me/app/src/lexer.ts\nVERIFY: Run the tests in /home/me/app/src\nVERIFY: Read back C:/Users/me/notes.md', null, seen)
+  await start($)
+  await $.turn.start({ turnId: 't1' })
+  await $.tool.call({ tool: 'Bash', command: 'cd /home/me/app/src && npx vitest run /home/me/app/src/parser.test.ts' })
+  await $.tool.call({ tool: 'PowerShell', command: 'Get-Content "/home/me/app/src/out.log" -Tail 20' })
+  await $.tool.call({ tool: 'Read', file_path: '/home/me/app/src/lexer.ts' })
+  await $.tool.call({ tool: 'Bash', command: 'cat /c/Users/me/notes.md' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).not.toContain('parser.test.ts')
+  expect(b).not.toContain('out.log')
+  expect(b).not.toContain('notes.md')
+  expect(b).toContain('Run the tests for /home/me/app/src/lexer.ts')
+  // A directory named in a command (cd) is not a check of what is in it.
+  expect(b).toContain('Run the tests in /home/me/app/src')
+})
+
+test('dropAlreadyChecked: path matching ignores case, slashes and msys drives, and stops at a longer name', () => {
+  const calls = [{ read: 'c:/users/me/a.ts' }, { run: 'cat c:/users/me/b.ts.bak && node c:/users/me/d.js' }]
+  const items = [
+    { tag: 'VERIFY', text: 'Read back C:\\Users\\Me\\a.ts' },
+    { tag: 'VERIFY', text: 'Read back /c/Users/me/a.ts' },
+    { tag: 'VERIFY', text: 'Read back C:/Users/me/b.ts' },
+    { tag: 'VERIFY', text: 'Run C:/Users/me/d.js again' },
+    { tag: 'VERIFY', text: 'Run the whole suite again' },
+    { tag: 'HANDOFF', text: 'Summarise C:/Users/me/a.ts for review' },
+  ]
+  expect(dropAlreadyChecked(items, calls).map((it) => it.text)).toEqual(['Read back C:/Users/me/b.ts', 'Run the whole suite again', 'Summarise C:/Users/me/a.ts for review'])
+  expect(dropAlreadyChecked(items, [])).toEqual(items)
 })

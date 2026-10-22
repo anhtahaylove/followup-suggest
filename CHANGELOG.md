@@ -2,6 +2,14 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.4 (2026-10-23)
+
+- A verify row is dropped when the turn that just finished already checked what it names, so the band no longer offers
+  to read back a file the agent just read back. The mod notes the main conversation's tool calls of the turn: a Read of
+  a file, or a Bash or PowerShell command naming it, counts as a check until the file is edited or written again later
+  in the turn. A row asking to run or test something needs such a command; a Read is not enough. Rows naming no file,
+  naming a directory, or naming a file nothing checked are kept, as are next, handoff and needs-input rows.
+
 ## 2.0.3 (2026-10-22)
 
 - A force branch delete is marked when a global option has a quoted value with spaces

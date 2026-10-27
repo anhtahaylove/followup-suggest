@@ -669,25 +669,35 @@ async function attended($) {
 const worthKeeping = (rec) => !!rec && typeof rec === "object" && Date.now() - Number(rec.at) < KEEP_MS &&
   ((Array.isArray(rec.last) && rec.last.length > 0) || (Array.isArray(rec.history) && rec.history.length > 0) || rec.enabled === false)
 
+// Band writes and forget deletions share one FIFO. An already-dispatched store.set cannot
+// be cancelled by an epoch check; deletion must run after it, before newer valid writes.
+let stateWrites = Promise.resolve()
 async function persist($) {
-  try {
-    if (!await attended($)) return
-    if (!sid) sid = String(await $.session.id())
-    const key = "band:" + sid
-    await $.store.set(key, { at: Date.now(), menuAt, last, used: [...used], counted: [...counted], enabled, collapsed, recentUser, history })
-    const index = (await $.store.get("bands")) || []
-    if (index[index.length - 1] === key) return
-    // The index changed (a new session, or this one moved to the end): prune it while we are at it.
-    const kept = []
-    for (const k of index) {
-      if (k === key) continue
-      if (worthKeeping(await $.store.get(k))) kept.push(k)
-      else await $.store.delete(k)
-    }
-    kept.push(key)
-    while (kept.length > MAX_STORED_SESSIONS) await $.store.delete(kept.shift())
-    await $.store.set("bands", kept)
-  } catch (err) { /* persistence must never get in the way */ }
+  const mine = epoch
+  const saved = { at: Date.now(), menuAt, last, used: [...used], counted: [...counted], enabled, collapsed, recentUser: [...recentUser], history: [...history] }
+  const pending = stateWrites.then(async () => {
+    try {
+      if (epoch !== mine || !await attended($) || epoch !== mine) return
+      if (!sid) sid = String(await $.session.id())
+      if (epoch !== mine) return
+      const key = "band:" + sid
+      await $.store.set(key, saved)
+      const index = (await $.store.get("bands")) || []
+      if (index[index.length - 1] === key) return
+      // The index changed (a new session, or this one moved to the end): prune it while we are at it.
+      const kept = []
+      for (const k of index) {
+        if (k === key) continue
+        if (worthKeeping(await $.store.get(k))) kept.push(k)
+        else await $.store.delete(k)
+      }
+      kept.push(key)
+      while (kept.length > MAX_STORED_SESSIONS) await $.store.delete(kept.shift())
+      await $.store.set("bands", kept)
+    } catch (err) { /* persistence must never get in the way */ }
+  })
+  stateWrites = pending
+  await pending
 }
 
 // Is a suggestion's text (its opening words) in the input box right now? A check mark means "it is in the box", so it
@@ -715,6 +725,7 @@ async function syncMarks($, text) {
 async function ensureLoaded($) {
   if (loaded) return
   loaded = true
+  const mine = epoch
   try {
     const setting = await $.store.get("lang")
     if (setting === "en" || setting === "vi") langSetting = setting
@@ -724,7 +735,7 @@ async function ensureLoaded($) {
   try {
     sid = String(await $.session.id())
     const saved = await $.store.get("band:" + sid)
-    if (!saved || typeof saved !== "object") return
+    if (epoch !== mine || !saved || typeof saved !== "object") return
     if (Array.isArray(saved.recentUser)) {
       recentUser = []
       for (const t of saved.recentUser.filter((t) => typeof t === "string").slice(-4)) rememberUserText(t)
@@ -748,6 +759,7 @@ async function ensureLoaded($) {
       if (used.size) {
         // Keep a check mark only for a row that is still in the box (a hot reload keeps the draft; exit + resume empties it).
         const draft = await draftText($)
+        if (epoch !== mine) return
         used = new Set([...used].filter((i) => inDraft(draft, last[i])))
         await persist($)
       }
@@ -951,8 +963,40 @@ export function register(on, options) {
 
   on("command.run", { command: "fu" }, async ($, e) => {
     const word = String(e.args ?? "").trim().toLowerCase()
-    // Invalidate background work before even loading the store: forget may race with any pending fork.
-    if (word === "forget" || word === "quên") epoch += 1
+    if (word === "forget" || word === "quên") {
+      // Start loading settings, but invalidate its band restore and all older model work.
+      const loading = ensureLoaded($)
+      epoch += 1
+      last = []
+      used = new Set()
+      counted = new Set()
+      collapsed = false
+      history = []
+      recentUser = []
+      menuAt = 0
+      restored = false
+      logOpen = false
+      // Reserve the delete before any await. New-generation persists queue behind it;
+      // older writes already in flight finish first and cannot resurrect forgotten data.
+      // Only bands are removed: statistics and row/language settings are kept.
+      let count = 0
+      const pending = stateWrites.then(async () => {
+        try {
+          if (!sid) sid = String(await $.session.id())
+          const keys = new Set([...((await $.store.get("bands")) || []), "band:" + sid])
+          for (const k of keys) {
+            if (await $.store.get(k)) count += 1
+            await $.store.delete(k)
+          }
+          await $.store.delete("bands")
+        } catch (err) { /* whatever could be deleted is gone */ }
+      })
+      stateWrites = pending
+      await loading
+      await pending
+      await redraw($)
+      return { text: L().forgot(count) }
+    }
     await ensureLoaded($)
     if (word === "off" || word === "tắt") {
       enabled = false
@@ -1002,31 +1046,6 @@ export function register(on, options) {
       }
       await $.store.set("rows", n)
       return { text: L().rowsSet(n) }
-    }
-    if (word === "forget" || word === "quên") {
-      // Deletes every stored session (menus, history, recent prompts) and this session's state; statistics and the
-      // row/language settings are kept (/fu reset clears the statistics).
-      let count = 0
-      try {
-        if (!sid) sid = String(await $.session.id())
-        const keys = new Set([...((await $.store.get("bands")) || []), "band:" + sid])
-        for (const k of keys) {
-          if (await $.store.get(k)) count += 1
-          await $.store.delete(k)
-        }
-        await $.store.delete("bands")
-      } catch (err) { /* whatever could be deleted is gone */ }
-      last = []
-      used = new Set()
-      counted = new Set()
-      collapsed = false
-      history = []
-      recentUser = []
-      menuAt = 0
-      restored = false
-      logOpen = false
-      await redraw($)
-      return { text: L().forgot(count) }
     }
     if (word === "reset") {
       try { await $.store.delete("stats") } catch (err) { /* nothing stored */ }
@@ -1188,7 +1207,7 @@ export function register(on, options) {
     if (e.agentId || e.isAborted) return next(e)
     const mine = epoch // before any await: whatever the user does from here on makes this menu stale
     await ensureLoaded($)
-    if (!enabled || recentUser.some((t) => t.includes(INCOMPLETE_CONTEXT))) return next(e)
+    if (epoch !== mine || !enabled || recentUser.some((t) => t.includes(INCOMPLETE_CONTEXT))) return next(e)
 
     const answer = String(e.answer ?? "").trim()
     if (answer.length < MIN_ANSWER_CHARS) return next(e)
@@ -1219,7 +1238,7 @@ export function register(on, options) {
     if (debug === "1") { try { $.ui.log("followup-suggest: command.list=" + (commands ? commands.length : "unreadable") + " described=" + (skills ? skills.split(String.fromCharCode(10)).length : 0)) } catch (err) { /* debug aid only */ } }
 
     let source = "fork"
-    if (forkUnavailable) return next(e)
+    if (epoch !== mine || forkUnavailable) return next(e)
     let text = await askFork($, hint)
     if (epoch !== mine) return next(e) // do not start a fallback or emit notices for forgotten work
     if (text === FORK_UNAVAILABLE) {
@@ -1238,8 +1257,10 @@ export function register(on, options) {
           timeoutMs: 20000,
         })
       } catch (err) {
+        if (epoch !== mine) return next(e)
         return { text: L().modelError(String((err && err.message) || err).slice(0, 120)) }
       }
+      if (epoch !== mine) return next(e)
       if (!r || !r.isAnswered) {
         return { text: L().modelSilent(String((r && r.reason) || L().unknownReason).slice(0, 120)) }
       }

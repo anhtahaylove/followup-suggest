@@ -5,6 +5,8 @@ type Seen = {
   forkCalls: number; haikuCalls: number; draft: string; fills: string[]; attended?: string; forkThrows?: boolean
   store: Record<string, unknown>; missing?: string[]; forkPrompt?: string; forkGate?: Promise<void>; forkStarted?: () => void
   storeGetGate?: (key: string) => Promise<void>; existsGate?: () => Promise<void>
+  commandsGate?: () => Promise<void>; haikuGate?: () => Promise<void>; haikuThrows?: boolean
+  storeSetGate?: (key: string) => Promise<void>; storeDeleteGate?: (key: string) => Promise<void>
   fallbackSystem?: string; commands?: Array<{ name: string; description: string; source: string }>
 }
 
@@ -27,11 +29,22 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
     if (seen.storeGetGate) await seen.storeGetGate(e.key)
     return { value: seen.store[e.key] }
   })
-  on('store.set', (_api: unknown, e: { key: string; value: unknown }) => { seen.store[e.key] = e.value; return { value: undefined } })
+  on('store.set', async (_api: unknown, e: { key: string; value: unknown }) => {
+    if (seen.storeSetGate) await seen.storeSetGate(e.key)
+    seen.store[e.key] = e.value
+    return { value: undefined }
+  })
   on('ui.render', (api: any, e: any) => api.ui.resolve(e).Text({ children: ['base'] }))
   on('session.id', () => ({ value: 'test-session' }))
-  on('command.list', () => ({ value: seen.commands ?? [] }))
-  on('store.delete', (_api: unknown, e: { key: string }) => { delete seen.store[e.key]; return { value: undefined } })
+  on('command.list', async () => {
+    if (seen.commandsGate) await seen.commandsGate()
+    return { value: seen.commands ?? [] }
+  })
+  on('store.delete', async (_api: unknown, e: { key: string }) => {
+    if (seen.storeDeleteGate) await seen.storeDeleteGate(e.key)
+    delete seen.store[e.key]
+    return { value: undefined }
+  })
   on('fs.exists', async (_api: unknown, e: { path: string }) => {
     if (seen.existsGate) await seen.existsGate()
     // The host resolves the path first: on Windows a POSIX path lands on the current drive (C:\home\...), on Linux a
@@ -49,9 +62,11 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
       ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
       : { value: { isAnswered: true, text: forkText } }
   })
-  on('model.complete', (_api: unknown, e: { system: string }) => {
+  on('model.complete', async (_api: unknown, e: { system: string }) => {
     seen.fallbackSystem = e.system
     seen.haikuCalls++
+    if (seen.haikuGate) await seen.haikuGate()
+    if (seen.haikuThrows) throw new Error('fallback failed')
     return haikuText === null
       ? { value: { isAnswered: false, reason: 'rate limited' } }
       : { value: { isAnswered: true, text: haikuText } }
@@ -1455,6 +1470,96 @@ function gate() {
   let release: () => void = () => {}
   const promise = new Promise<void>((resolve) => { release = resolve })
   return { promise, release }
+}
+
+for (const key of ['band:test-session', 'bands']) {
+  test('/fu forget orders deletion after an in-flight write to ' + key, async ($, on) => {
+    const seen = blank(), writing = gate(), proceed = gate()
+    seen.storeSetGate = async (k) => {
+      if (k === key) { seen.storeSetGate = undefined; writing.release(); await proceed.promise }
+    }
+    stubs(on, THREE, null, seen)
+    await start($)
+    const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+    await writing.promise
+    const forgetting = $.command.run({ command: 'fu', args: 'forget' })
+    // Wait for the command's visible clear, not elapsed time. With ordered deletion this
+    // happens before its queued I/O; old code clears only after deleting the store keys.
+    let visible = await band($)
+    for (let i = 0; i < 20 && visible.includes('[verify]'); i++) visible = await band($)
+    proceed.release()
+    await Promise.all([pending, forgetting])
+    expect(visible).not.toContain('[verify]')
+    expect(seen.store['band:test-session']).toBeUndefined()
+    expect(seen.store.bands).toBeUndefined()
+    expect(await band($)).not.toContain('[verify]')
+  })
+}
+
+test('/fu forget preserves a newer menu generated while deletion is pending', async ($, on) => {
+  const seen = blank(), deleting = gate(), proceed = gate(), generated = gate()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  seen.storeDeleteGate = async (key) => {
+    if (key === 'band:test-session') { seen.storeDeleteGate = undefined; deleting.release(); await proceed.promise }
+  }
+  const forgetting = $.command.run({ command: 'fu', args: 'forget' })
+  await deleting.promise
+  seen.storeSetGate = async (key) => { if (key === 'stats') generated.release() }
+  const newer = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await generated.promise
+  expect(await band($)).toContain('[verify]')
+  proceed.release()
+  await Promise.all([forgetting, newer])
+  expect(seen.forkCalls).toBe(2)
+  expect((seen.store['band:test-session'] as any).last.length).toBe(3)
+  expect((seen.store['band:test-session'] as any).history).toEqual([])
+  expect(seen.store.bands).toEqual(['band:test-session'])
+  expect(await band($)).toContain('[verify]')
+})
+
+for (const boundary of ['initial load', 'command listing']) {
+  test('/fu forget cancels model work waiting at ' + boundary, async ($, on) => {
+    const seen = blank(), waiting = gate(), proceed = gate()
+    if (boundary === 'initial load') {
+      seen.storeGetGate = async (key) => {
+        if (key === 'lang') { seen.storeGetGate = undefined; waiting.release(); await proceed.promise }
+      }
+    } else {
+      seen.commandsGate = async () => { waiting.release(); await proceed.promise }
+    }
+    stubs(on, THREE, null, seen)
+    await start($)
+    const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+    await waiting.promise
+    await $.command.run({ command: 'fu', args: 'forget' })
+    proceed.release()
+    const result: any = await pending
+    expect(seen.forkCalls).toBe(0)
+    expect(seen.haikuCalls).toBe(0)
+    expect(result?.text).toBeFalsy()
+    expect(seen.store['band:test-session']).toBeUndefined()
+    expect(seen.store.bands).toBeUndefined()
+  })
+}
+
+for (const outcome of ['silent', 'error']) {
+  test('/fu forget suppresses a stale fallback ' + outcome + ' notice', async ($, on) => {
+    const seen = blank(), waiting = gate(), proceed = gate()
+    seen.haikuThrows = outcome === 'error'
+    seen.haikuGate = async () => { waiting.release(); await proceed.promise }
+    stubs(on, null, null, seen)
+    await start($)
+    const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+    await waiting.promise
+    await $.command.run({ command: 'fu', args: 'forget' })
+    proceed.release()
+    const result: any = await pending
+    expect(seen.haikuCalls).toBe(1)
+    expect(result?.text).toBeFalsy()
+    expect(seen.store['band:test-session']).toBeUndefined()
+  })
 }
 
 test('/fu forget invalidates a fork already waiting for its answer', async ($, on) => {

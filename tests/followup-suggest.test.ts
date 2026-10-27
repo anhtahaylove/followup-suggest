@@ -3,7 +3,9 @@ import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeT
 
 type Seen = {
   forkCalls: number; haikuCalls: number; draft: string; fills: string[]; attended?: string; forkThrows?: boolean
-  store: Record<string, unknown>; missing?: string[]; forkPrompt?: string; forkGate?: Promise<void>; commands?: Array<{ name: string; description: string; source: string }>
+  store: Record<string, unknown>; missing?: string[]; forkPrompt?: string; forkGate?: Promise<void>; forkStarted?: () => void
+  storeGetGate?: (key: string) => Promise<void>; existsGate?: () => Promise<void>
+  fallbackSystem?: string; commands?: Array<{ name: string; description: string; source: string }>
 }
 
 // Stubs answer in Claude Code's place, in the shape the test kit asks for per event.
@@ -21,19 +23,24 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
     if (seen.attended === 'throw') throw new Error('unknown method session.surfaces')
     return { value: seen.attended === '0' ? [] : ['terminal'] }
   })
-  on('store.get', (_api: unknown, e: { key: string }) => ({ value: seen.store[e.key] }))
+  on('store.get', async (_api: unknown, e: { key: string }) => {
+    if (seen.storeGetGate) await seen.storeGetGate(e.key)
+    return { value: seen.store[e.key] }
+  })
   on('store.set', (_api: unknown, e: { key: string; value: unknown }) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('ui.render', (api: any, e: any) => api.ui.resolve(e).Text({ children: ['base'] }))
   on('session.id', () => ({ value: 'test-session' }))
   on('command.list', () => ({ value: seen.commands ?? [] }))
   on('store.delete', (_api: unknown, e: { key: string }) => { delete seen.store[e.key]; return { value: undefined } })
-  on('fs.exists',(_api: unknown, e: { path: string }) => {
+  on('fs.exists', async (_api: unknown, e: { path: string }) => {
+    if (seen.existsGate) await seen.existsGate()
     // The host resolves the path first: on Windows a POSIX path lands on the current drive (C:\home\...), on Linux a
     // Windows path is relative and lands under the working directory (/home/runner/.../C:/nope/...).
     const p = String(e.path).replace(/\\/g, '/')
     return { value: !(seen.missing || []).some((m) => p === m || p.endsWith(':' + m) || p.endsWith('/' + m)) }
   })
   on('model.fork', async (_api: unknown, e: { prompt: string }) => {
+    if (seen.forkStarted) seen.forkStarted()
     if (seen.forkGate) await seen.forkGate
     if (seen.forkThrows) throw new Error('unknown method model.fork')
     seen.forkPrompt = e.prompt
@@ -42,8 +49,9 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
       ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
       : { value: { isAnswered: true, text: forkText } }
   })
-  on('model.complete', () => {
-    seen.haikuCalls += 1
+  on('model.complete', (_api: unknown, e: { system: string }) => {
+    seen.fallbackSystem = e.system
+    seen.haikuCalls++
     return haikuText === null
       ? { value: { isAnswered: false, reason: 'rate limited' } }
       : { value: { isAnswered: true, text: haikuText } }
@@ -746,7 +754,9 @@ test('a checked row whose text left the box is added again on /fu, without count
   expect(seen.draft).toBe('Xem diff của file cấu hình')
   await $.command.run({ command: 'fu', args: '2' }) // still in the box: nothing is added twice
   expect(seen.draft).toBe('Xem diff của file cấu hình')
-  seen.draft = '' // the user cleared the box
+  seen.draft = '' // the user cleared the box: the real editor event removes the UI mark
+  await $.prompt.change({ text: '', cursor: 0, origin: { kind: 'clear' } })
+  expect(await band($)).not.toContain('✓ 2.')
   await $.command.run({ command: 'fu', args: '2' })
   expect(seen.draft).toBe('Xem diff của file cấu hình')
   expect(((seen.store.stats as any).used || {}).NEXT).toBe(1)
@@ -876,7 +886,7 @@ test('computeTuning: a manual row count replaces the automatic cap and is report
   expect(t.notes.join(' ')).toContain('bạn đặt tối đa 5 dòng')
   expect(computeTuning(stats, 0).maxItems).toBe(3)
   expect(computeTuning(stats, 9).maxItems).toBe(3)
-  expect(computeTuning({}, 2).maxItems).toBe(5)
+  expect(computeTuning({}, 2).maxItems).toBe(2) // explicit user limits do not wait for usage data
 })
 
 test('/fu rows N sets the row cap, /fu rows auto clears it, bad input explains', async ($, on) => {
@@ -1410,4 +1420,273 @@ test('dropAlreadyChecked: path matching ignores case, slashes and msys drives, a
   ]
   expect(dropAlreadyChecked(items, calls).map((it) => it.text)).toEqual(['Read back C:/Users/me/b.ts', 'Run the whole suite again', 'Summarise C:/Users/me/a.ts for review'])
   expect(dropAlreadyChecked(items, [])).toEqual(items)
+})
+
+// ---- Regression coverage (2.0.5) -------------------------------------------------------------------------------
+test('counted rows survive restoration without restoring absent draft check marks', async ($, on) => {
+  const seen = blank()
+  seen.store.stats = { used: { NEXT: 1 }, pos: { '0': 1 }, slash: { used: 1 } }
+  seen.store['band:test-session'] = {
+    at: Date.now(), last: [{ tag: 'NEXT', text: '/code-review high' }], used: [], counted: [0],
+  }
+  stubs(on, 'NONE', null, seen)
+  expect(await band($)).not.toContain('✓')
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(seen.draft).toBe('/code-review high')
+  expect(seen.store.stats).toEqual({ used: { NEXT: 1 }, pos: { '0': 1 }, slash: { used: 1 } })
+  await $.prompt.submit({ text: '/code-review high' })
+  expect((seen.store['band:test-session'] as any).history[0].items[0].state).toBe('sent')
+})
+
+test('legacy saved used rows remain counted after resume clears their check marks', async ($, on) => {
+  const seen = blank()
+  seen.store.stats = { used: { VERIFY: 1 }, pos: { '0': 1 } }
+  seen.store['band:test-session'] = {
+    at: Date.now(), last: [{ tag: 'VERIFY', text: 'Read the parser output' }], used: [0],
+  }
+  stubs(on, 'NONE', null, seen)
+  expect(await band($)).not.toContain('✓')
+  await $.command.run({ command: 'fu', args: '1' })
+  expect((seen.store.stats as any).used.VERIFY).toBe(1)
+  expect((seen.store['band:test-session'] as any).counted).toEqual([0])
+})
+
+function gate() {
+  let release: () => void = () => {}
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+test('/fu forget invalidates a fork already waiting for its answer', async ($, on) => {
+  const seen = blank()
+  const fork = gate(), started = gate()
+  seen.forkGate = fork.promise
+  seen.forkStarted = started.release
+  stubs(on, THREE, null, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await started.promise
+  await $.command.run({ command: 'fu', args: 'forget' })
+  fork.release()
+  await pending
+  expect(await band($)).not.toContain('[verify]')
+  expect(seen.store['band:test-session']).toBeUndefined()
+  expect(seen.store.bands).toBeUndefined()
+})
+
+test('/fu forget invalidates the fork before its first store await completes', async ($, on) => {
+  const seen = blank()
+  const fork = gate(), started = gate(), reading = gate(), proceed = gate()
+  seen.forkGate = fork.promise
+  seen.forkStarted = started.release
+  stubs(on, THREE, null, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await started.promise
+  seen.storeGetGate = async (key) => {
+    if (key === 'bands') { seen.storeGetGate = undefined; reading.release(); await proceed.promise }
+  }
+  const forgetting = $.command.run({ command: 'fu', args: 'forget' })
+  await reading.promise
+  fork.release()
+  await pending
+  expect(await band($)).not.toContain('[verify]')
+  proceed.release()
+  await forgetting
+  expect(seen.store['band:test-session']).toBeUndefined()
+})
+
+test('/fu forget prevents resurrection while the completed fork is grounding paths', async ($, on) => {
+  const seen = blank()
+  const checking = gate(), proceed = gate()
+  seen.existsGate = async () => { checking.release(); await proceed.promise }
+  stubs(on, 'VERIFY: Read back C:/Users/me/app/parser.ts', null, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await checking.promise
+  await $.command.run({ command: 'fu', args: 'forget' })
+  proceed.release()
+  await pending
+  expect(await band($)).not.toContain('parser.ts')
+  expect(seen.store['band:test-session']).toBeUndefined()
+  expect(seen.store.bands).toBeUndefined()
+})
+
+test('a long latest request retains its first and last anchors and middle prohibition within the budget', async ($, on) => {
+  const seen = blank()
+  stubs(on, 'VERIFY: Run the parser tests\nNEXT: Review C:/Users/me/app/latest.ts', null, seen)
+  const text = 'Work on C:/Users/me/app/first.ts. ' + 'Background details. '.repeat(130)
+    + 'Do not run tests. ' + 'More background. '.repeat(150) + 'Finish by reviewing C:/Users/me/app/latest.ts.'
+  await $.prompt.submit({ text })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const remembered = (seen.store['band:test-session'] as any).recentUser
+  expect(remembered.join('\n').length <= 4000).toBe(true)
+  expect(remembered.join('\n')).toContain('first.ts')
+  expect(remembered.join('\n')).toContain('Do not run tests')
+  expect(remembered.join('\n')).toContain('latest.ts')
+  expect(seen.forkPrompt).toContain('first.ts')
+  expect(seen.forkPrompt).toContain('Do not run tests')
+  expect(seen.forkPrompt).toContain('latest.ts')
+  expect(await band($)).not.toContain('Run the parser tests')
+  expect(await band($)).toContain('Review C:/Users/me/app/latest.ts')
+})
+
+test('the fallback receives retained long-request constraints and tail anchors too', async ($, on) => {
+  const seen = blank()
+  stubs(on, null, 'VERIFY: Run the parser tests\nNEXT: Review C:/Users/me/app/latest.ts', seen)
+  await $.prompt.submit({ text: 'Review C:/Users/me/app/first.ts. ' + 'Details. '.repeat(300)
+    + 'Never run tests. ' + 'Details. '.repeat(300) + 'Review C:/Users/me/app/latest.ts.' })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.fallbackSystem).toContain('Never run tests')
+  expect(seen.fallbackSystem).toContain('latest.ts')
+  expect(await band($)).not.toContain('Run the parser tests')
+})
+
+test('long requests with constraints the local filter cannot enforce stay silent', async ($, on) => {
+  const seen = blank()
+  stubs(on, 'NEXT: Deploy the parser', null, seen)
+  await $.prompt.submit({ text: 'Review the parser. ' + 'Context. '.repeat(300)
+    + 'Only read files; production changes are not allowed. ' + 'Context. '.repeat(300) + 'Stop after the review.' })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(await band($)).not.toContain('Deploy the parser')
+  expect(seen.forkCalls).toBe(0)
+  expect((seen.store['band:test-session'] as any).recentUser.join('\n')).toContain('Only read files')
+})
+
+test('manual row caps apply before self-tuning has enough data', () => {
+  for (const stats of [undefined, {}, { shown: { NEXT: 19 } }]) {
+    for (let n = 1; n <= 5; n++) {
+      const tuning = computeTuning(stats, n)
+      expect(tuning.ready).toBe(false)
+      expect(tuning.maxItems).toBe(n)
+      expect(tuning.notes.join(' ')).toContain('you set at most ' + n)
+    }
+  }
+  for (const n of [0, 6, NaN, 1.5]) expect(computeTuning({}, n).maxItems).toBe(5)
+})
+
+test('/fu rows 1 limits the first menu and its model hint, before any usage', async ($, on) => {
+  const seen = blank()
+  stubs(on, THREE, null, seen)
+  await $.command.run({ command: 'fu', args: 'rows 1' })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkPrompt).toContain('at most 1')
+  expect((seen.store['band:test-session'] as any).last.length).toBe(1)
+})
+
+test('shell readers check content but do not execute the named test file', () => {
+  const p = 'c:/users/me/parser.test.ts'
+  const read = { tag: 'VERIFY', text: 'Read back C:/Users/me/parser.test.ts' }
+  const run = { tag: 'VERIFY', text: 'Run the tests in C:/Users/me/parser.test.ts' }
+  for (const command of ['cat ' + p, 'type ' + p, 'get-content "' + p + '" -tail 20', 'head -n 20 ' + p, 'tail ' + p]) {
+    expect([command, dropAlreadyChecked([read, run], [{ run: command }])]).toEqual([command, [run]])
+  }
+})
+
+test('recognized runtimes and test runners provide execution evidence, not mere path mentions', () => {
+  const p = 'c:/users/me/parser.test.ts'
+  const run = { tag: 'VERIFY', text: 'Run the tests in C:/Users/me/parser.test.ts' }
+  for (const command of ['node ' + p, 'npx vitest run ' + p, 'npm test -- ' + p, 'python -m pytest ' + p,
+    'pytest ' + p, 'pnpm exec jest ' + p, 'bun test ' + p]) {
+    expect([command, dropAlreadyChecked([run], [{ run: command }])]).toEqual([command, []])
+  }
+  for (const command of ['echo ' + p, 'ls ' + p, 'git diff -- ' + p, 'echo node ' + p,
+    'bash -c "node ' + p + '"', 'cat ' + p + ' | node', 'node --check ' + p, 'node other.js ' + p]) {
+    expect([command, dropAlreadyChecked([run], [{ run: command }])]).toEqual([command, [run]])
+  }
+})
+
+test('mixed commands associate execution with the runner clause, not a neighboring reader', () => {
+  const items = [
+    { tag: 'VERIFY', text: 'Run the tests in C:/Users/me/a.test.ts' },
+    { tag: 'VERIFY', text: 'Run the tests in C:/Users/me/b.test.ts' },
+    { tag: 'VERIFY', text: 'Read back C:/Users/me/a.test.ts' },
+  ]
+  for (const separator of [' && ', '; ', '\n']) {
+    const command = 'cat c:/users/me/a.test.ts' + separator + 'npx vitest run c:/users/me/b.test.ts'
+    expect(dropAlreadyChecked(items, [{ run: command }])).toEqual([items[0]])
+  }
+  // A semicolon in a quoted argument is not a second executable command.
+  expect(dropAlreadyChecked(items, [{ run: 'echo "cat c:/users/me/a.test.ts; node c:/users/me/b.test.ts"' }])).toEqual(items)
+})
+
+test('shell read tools keep execution rows while dropping content checks through the public hook', async ($, on) => {
+  const seen = blank()
+  stubs(on, 'VERIFY: Run C:/Users/me/cat.test.ts\nVERIFY: Run C:/Users/me/type.test.ts\nVERIFY: Run C:/Users/me/ps.test.ts\nVERIFY: Read back C:/Users/me/ps.test.ts\nVERIFY: Run C:/Users/me/ran.test.ts', null, seen)
+  await start($)
+  await $.turn.start({ turnId: 'shell-read' })
+  await $.tool.call({ tool: 'Bash', command: 'cat C:/Users/me/cat.test.ts' })
+  await $.tool.call({ tool: 'Bash', command: 'type C:/Users/me/type.test.ts' })
+  await $.tool.call({ tool: 'PowerShell', command: 'Get-Content C:/Users/me/ps.test.ts; npx vitest run C:/Users/me/ran.test.ts' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).toContain('Run C:/Users/me/cat.test.ts')
+  expect(b).toContain('Run C:/Users/me/type.test.ts')
+  expect(b).toContain('Run C:/Users/me/ps.test.ts')
+  expect(b).not.toContain('Read back C:/Users/me/ps.test.ts')
+  expect(b).not.toContain('ran.test.ts')
+})
+
+test('/fu forget does not launch the fallback when an invalidated fork cannot answer', async ($, on) => {
+  const seen = blank(), fork = gate(), started = gate()
+  seen.forkGate = fork.promise
+  seen.forkStarted = started.release
+  stubs(on, null, THREE, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await started.promise
+  await $.command.run({ command: 'fu', args: 'forget' })
+  fork.release()
+  await pending
+  expect(seen.haikuCalls).toBe(0)
+  expect(seen.store['band:test-session']).toBeUndefined()
+})
+
+test('restored incomplete context stays silent without paying for a model', async ($, on) => {
+  const seen = blank()
+  seen.store['band:test-session'] = { at: Date.now(), last: [], recentUser: [
+    'Review the parser. [followup context incomplete: stay silent] Only read files. Stop here.',
+  ] }
+  stubs(on, 'NEXT: Deploy the parser', null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(0)
+  expect(seen.haikuCalls).toBe(0)
+  expect(await band($)).not.toContain('Deploy the parser')
+})
+
+test('truncated requests with compound prohibitions fail closed instead of losing the second verb', async ($, on) => {
+  const seen = blank()
+  stubs(on, 'NEXT: Deploy the parser', null, seen)
+  await $.prompt.submit({ text: 'Review the parser. ' + 'Details. '.repeat(300)
+    + 'Do not run or deploy anything. ' + 'Details. '.repeat(300) + 'Stop here.' })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(0)
+  expect(await band($)).not.toContain('Deploy the parser')
+})
+
+test('/fu forget prevents a store write after the fork has started updating statistics', async ($, on) => {
+  const seen = blank(), updating = gate(), proceed = gate()
+  stubs(on, THREE, null, seen)
+  await start($)
+  seen.storeGetGate = async (key) => {
+    if (key === 'stats' && seen.forkCalls) {
+      seen.storeGetGate = undefined
+      updating.release()
+      await proceed.promise
+    }
+  }
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await updating.promise
+  await $.command.run({ command: 'fu', args: 'forget' })
+  proceed.release()
+  await pending
+  expect(await band($)).not.toContain('[verify]')
+  expect(seen.store['band:test-session']).toBeUndefined()
+  expect(seen.store.bands).toBeUndefined()
 })

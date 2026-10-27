@@ -9,6 +9,8 @@ All notable changes to this project. Versions before 2.0 were private builds.
   counted state; the UI still reflects only text currently in the input box.
 - `/fu forget` invalidates pending menu work before its first await. Late fork answers, path checks and statistics
   updates cannot recreate the forgotten menu or session record; an invalidated fork does not start a Haiku fallback.
+  Band/index writes and forget deletion share a FIFO so already-dispatched writes finish before deletion and
+  newer valid menus persist afterwards. Lazy loading and fallback notices also respect the invalidation epoch.
 - Requests over the 4000-character history budget retain their beginning, end and constraint clauses instead of
   disappearing entirely. The complete retained latest request anchors both model paths. If detected constraints
   cannot be safely represented or exceed their budget, suggestions stay silent, including after restoration.

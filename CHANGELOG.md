@@ -2,6 +2,24 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.5 (2026-10-27)
+
+- Count a row once per menu independently of its draft check mark. Clearing or editing the draft, reinserting the row,
+  and restoring a saved menu no longer inflate used, position or skill counters. Legacy saved check marks seed the
+  counted state; the UI still reflects only text currently in the input box.
+- `/fu forget` invalidates pending menu work before its first await. Late fork answers, path checks and statistics
+  updates cannot recreate the forgotten menu or session record; an invalidated fork does not start a Haiku fallback.
+  Band/index writes and forget deletion share a FIFO so already-dispatched writes finish before deletion and
+  newer valid menus persist afterwards. Lazy loading and fallback notices also respect the invalidation epoch.
+- Requests over the 4000-character history budget retain their beginning, end and constraint clauses instead of
+  disappearing entirely. The complete retained latest request anchors both model paths. If detected constraints
+  cannot be safely represented or exceed their budget, suggestions stay silent, including after restoration.
+- Separate shell content reads (`cat`, `type`, `Get-Content`, `head`, `tail`) from recognized runtime/test-runner
+  execution. Simple mixed commands are checked clause by clause; unsupported shell syntax and mere path mentions
+  are not execution evidence.
+- Apply `/fu rows N` immediately, even before self-tuning has enough usage data.
+- Pin CI to Claude Code 2.1.311, the version used for the isolated, stubbed regression suite.
+
 ## 2.0.4 (2026-10-23)
 
 - A verify row is dropped when the turn that just finished already checked what it names, so the band no longer offers

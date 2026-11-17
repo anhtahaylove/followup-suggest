@@ -144,6 +144,98 @@ test('more than five lines are cut to five', async ($, on) => {
   expect(b).not.toContain('"hotkey":"6"')
 })
 
+const LONG = 'Chạy lại toàn bộ bộ test tích hợp của thay đổi này rồi đối chiếu kết quả với bản chạy trước đó'
+const bandAt = async ($: any, props: any) => JSON.stringify(await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props }))
+// Every node of the tree that carries a key, so a test can look at a button and press it.
+const keyed = (t: any, out: any[] = []): any[] => {
+  if (t && typeof t === 'object') {
+    if (t.key) out.push(t)
+    for (const v of Object.values(t)) keyed(v, out)
+  }
+  return out
+}
+
+test('a narrow band cuts the row label to bodyColumns but a press still inserts the full suggestion', async ($, on) => {
+  const seen = fresh()
+  stubs(on, 'NEXT: ' + LONG, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const tree = await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: { bodyColumns: 40 } })
+  const b = JSON.stringify(tree)
+  expect(b).toContain('…')
+  expect(b).not.toContain(LONG)
+  // The tree is flattened: row 1 is one label, "  [bước tiếp] ★ " plus the cut text. Claude Code draws the hotkey's
+  // "1: " in front of it, so the label gets the other 37 of the 40 columns.
+  const row = keyed(tree).find((n: any) => n.key === 'fu-0')
+  expect(Array.from(row.label).length).toBe(37)
+  // A click and /fu 1 both go through addIndexes, which reads the stored suggestion, not the label.
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(seen.draft).toBe(LONG)
+})
+
+test('narrow bodyColumns also fits the title and the footer', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const tree = await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: { bodyColumns: 30 } })
+  const hide = keyed(tree).find((n: any) => n.key === 'fu-hide')
+  expect(Array.from(hide.label).length).toBe(30)
+  expect(hide.label.endsWith('…')).toBe(true)
+  expect(JSON.stringify(tree)).not.toContain(STRINGS.vi.header)
+})
+
+test('a small maxRows drops the Hide line, then insert-all, then the title, instead of overflowing', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const full = await bandAt($, { maxRows: 6 })
+  expect(full).toContain('Chèn tất cả 3 gợi ý')
+  expect(full).toContain('✕ Ẩn')
+  const noHide = await bandAt($, { maxRows: 5 })
+  expect(noHide).toContain('Chèn tất cả 3 gợi ý')
+  expect(noHide).not.toContain('✕ Ẩn')
+  const noAll = await bandAt($, { maxRows: 4 })
+  expect(noAll).toContain('[bàn giao]')
+  expect(noAll).not.toContain('Chèn tất cả')
+  expect(noAll).toContain('Gợi ý tiếp theo')
+  const rowsOnly = await bandAt($, { maxRows: 2 })
+  expect(rowsOnly).not.toContain('Gợi ý tiếp theo')
+  expect(rowsOnly).toContain('[kiểm chứng]')
+  expect(rowsOnly).toContain('[bước tiếp]')
+  expect(rowsOnly).not.toContain('3. ')
+})
+
+test('without props the band is exactly as before: nothing is cut, nothing is dropped', async ($, on) => {
+  const seen = fresh()
+  stubs(on, ['NEXT: ' + LONG, 'VERIFY: Chạy lại test của thay đổi này'].join(String.fromCharCode(10)), null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const plain = await band($)
+  expect(plain).toContain(LONG)
+  expect(plain).toContain(STRINGS.vi.header)
+  expect(plain).toContain('Chèn tất cả 2 gợi ý')
+  expect(plain).toContain('✕ Ẩn')
+  // Roomy props change nothing either; only the press handles differ from one render to the next.
+  const handles = (t: string) => t.replace(/"handle":\d+/g, '')
+  expect(handles(await bandAt($, { bodyColumns: 500, maxRows: 50 }))).toBe(handles(plain))
+})
+
+test('a new menu raises a toast only while the user has collapsed the band', async ($, on) => {
+  const seen = fresh()
+  const toasts: string[] = []
+  stubs(on, THREE, null, seen)
+  on('ui.toast', (_api: unknown, e: { text: string }) => { toasts.push(e.text); return { value: undefined } })
+  await start($)
+  await bandAt($, { isCollapsed: false })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(toasts).toEqual([])
+  await bandAt($, { isCollapsed: true })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(toasts).toEqual(['3 gợi ý mới (khung gợi ý đang thu gọn)'])
+})
+
 test('/fu 2 adds that prompt and the band stays, marked as used', async ($, on) => {
   const seen = fresh()
   stubs(on, THREE, null, seen)

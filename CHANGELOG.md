@@ -2,8 +2,14 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
-## Unreleased
+## 2.0.6 (2026-11-17)
 
+- The band now fits its pane. The title, each row, the insert-all line, the Hide line and the history lines are cut with
+  `…` to `e.props.bodyColumns` instead of wrapping, so a narrow terminal pane no longer makes the band grow. Only the
+  label is cut: a click still adds the full suggestion. When `e.props.maxRows` is too small, the Hide line, then the
+  insert-all line, then the title are dropped, then the last rows. Without these props the band is drawn as before.
+- When the band is collapsed (Ctrl+X, then Ctrl+A, read from `e.props.isCollapsed`), a new menu raises a toast
+  ("3 suggestions ready (the band is collapsed)") instead of arriving unseen.
 - Digit hotkeys on the band: with the input box empty, `1`-`5` adds that row and `0` inserts all rows (Claude Code draws
   `N:` before each row, so the row text no longer carries its own number). Trade-off: while a band is on screen, a bare
   digit typed first in an empty box is consumed by the band instead of starting your prompt; `/fu off` avoids it. The hotkeys are on by default, with no setting to turn them off.

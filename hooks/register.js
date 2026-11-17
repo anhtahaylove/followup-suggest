@@ -43,6 +43,7 @@ export const STRINGS = {
     headerRestored: (age) => "↳ Suggestions from last time, " + age + " — click a row to add it to the input box",
     headerAllDone: (n) => (n === 1 ? "↳ The suggestion is" : "↳ All " + n + " suggestions are") + " in the input box · /fu off to switch off",
     folded: (n) => "↳ Suggestions hidden (" + n + ") — click to show · /fu show · /fu off to switch off",
+    toastCollapsed: (n) => plural(n, "suggestion", "suggestions") + " ready (the band is collapsed)",
     insertAll: (n) => "  ⏎ Insert all " + n + " (do them together)",
     insertRest: (n) => "  ⏎ Insert the " + n + " remaining (do them together)",
     insertedAll: (n) => "  ✓ All " + n + " inserted — review the input box, then Enter",
@@ -87,6 +88,7 @@ export const STRINGS = {
     headerRestored: (age) => "↳ Gợi ý từ lần trước, " + age + " — bấm dòng để thêm vào ô nhập",
     headerAllDone: (n) => "↳ Đã thêm hết " + n + " gợi ý vào ô nhập · /fu off tắt hẳn",
     folded: (n) => "↳ Gợi ý đang ẩn (" + n + ") — bấm để hiện lại · /fu show · /fu off để tắt hẳn",
+    toastCollapsed: (n) => n + " gợi ý mới (khung gợi ý đang thu gọn)",
     insertAll: (n) => "  ⏎ Chèn tất cả " + n + " gợi ý (làm cùng lúc)",
     insertRest: (n) => "  ⏎ Chèn " + n + " gợi ý còn lại (làm cùng lúc)",
     insertedAll: (n) => "  ✓ Đã chèn tất cả " + n + " gợi ý — xem lại ô nhập rồi Enter",
@@ -626,6 +628,8 @@ let enabled = true
 // "Hide" folds the band into one dim line instead of throwing the menu away, so a mis-click is undoable
 // (click the line or /fu show). A new turn replaces the menu anyway, so `collapsed` never outlives it.
 let collapsed = false
+// Whether the user collapsed the whole band (Ctrl+X Ctrl+A), as last reported by `e.props.isCollapsed` in ui.render.
+let bandCollapsed = false
 // Menus that were replaced or sent (v1.3), newest last: [{ at, items: [{ tag, text, state }] }] with state
 // "sent" (the row's text was in the submitted prompt), "inserted" (it went into the box but not into the prompt as is)
 // or "unused". Lets the user see what was suggested after the band is gone; `/fu log` or a click opens it.
@@ -655,6 +659,14 @@ let autoTurn = false // the next turn was started by a notification or another n
 // Helpers take `$` as an argument; the mods validator only allows that for top-level function declarations.
 async function redraw($) {
   try { await $.ui.invalidate("ui.render") } catch (err) { /* the band refreshes on the next event anyway */ }
+}
+
+// Cut a label to `cols` columns (the band's `e.props.bodyColumns`) with an ellipsis so it never wraps; no width = unchanged.
+function fit(s, cols) {
+  if (!Number.isFinite(cols)) return s
+  const chars = Array.from(s)
+  const room = Math.max(cols, 1)
+  return chars.length > room ? chars.slice(0, room - 1).join("") + "…" : s
 }
 
 // `surfaces()` is empty in an unattended run; if it cannot be read, assume someone is watching.
@@ -889,7 +901,7 @@ async function addIndexes($, indexes) {
 // the last few menus. Rows are dim; clicking one only adds its text to the input box (nothing is sent, no state changes).
 // `lineWhenClosed` is false while a live band is on screen, so the two never stack up.
 const MARK = { sent: "➤", inserted: "✎", unused: "·" }
-function historyNodes($, Text, Button, lineWhenClosed) {
+function historyNodes($, Text, Button, lineWhenClosed, cols) {
   if (!history.length) return []
   if (!logOpen) {
     if (!lineWhenClosed) return []
@@ -897,22 +909,22 @@ function historyNodes($, Text, Button, lineWhenClosed) {
     const sent = lastMenu.items.filter((it) => it.state === "sent").length
     return [Button({
       key: "fu-log",
-      label: L().historyLine(history.length, sent, lastMenu.items.length),
+      label: fit(L().historyLine(history.length, sent, lastMenu.items.length), cols),
       plain: true,
       dimColor: true,
       onPress: async () => { logOpen = true; await redraw($) },
     })]
   }
   const T = L()
-  const nodes = [Text({ color: "gray", bold: true, children: [T.historyHeader] })]
+  const nodes = [Text({ color: "gray", bold: true, children: [fit(T.historyHeader, cols)] })]
   for (const h of history.slice(-3).reverse()) {
     const sent = h.items.filter((it) => it.state === "sent").length
-    nodes.push(Text({ dimColor: true, children: [T.historyEntry(new Date(h.at).toTimeString().slice(0, 5), sent, h.items.length)] }))
+    nodes.push(Text({ dimColor: true, children: [fit(T.historyEntry(new Date(h.at).toTimeString().slice(0, 5), sent, h.items.length), cols)] }))
     h.items.forEach((it, i) => {
       const text = it.text.length > 110 ? it.text.slice(0, 107) + "..." : it.text
       nodes.push(Button({
         key: "fu-log-" + h.at + "-" + i,
-        label: "    " + MARK[it.state] + " " + (i + 1) + ". [" + T.tags[it.tag] + "] " + (isRisky(it.text) ? "⚠ " : "") + text,
+        label: fit("    " + MARK[it.state] + " " + (i + 1) + ". [" + T.tags[it.tag] + "] " + (isRisky(it.text) ? "⚠ " : "") + text, cols),
         plain: true,
         dimColor: true,
         onPress: async () => { await addToDraft($, [it.text]) },
@@ -921,7 +933,7 @@ function historyNodes($, Text, Button, lineWhenClosed) {
   }
   nodes.push(Button({
     key: "fu-log-close",
-    label: T.historyClose,
+    label: fit(T.historyClose, cols),
     plain: true,
     dimColor: true,
     onPress: async () => { logOpen = false; await redraw($) },
@@ -1137,12 +1149,15 @@ export function register(on, options) {
     await ensureLoaded($)
     const { Box, Text, Button } = $.ui.resolve(e)
     const T = L()
-    const past = historyNodes($, Text, Button, !last.length)
+    const props = e.props || {}
+    bandCollapsed = props.isCollapsed === true
+    const cols = props.bodyColumns
+    const past = historyNodes($, Text, Button, !last.length, cols)
     if (!last.length) return past.length ? Box({ flexDirection: "column", children: [...past, theirs] }) : theirs
     if (collapsed) {
       const folded = Button({
         key: "fu-show",
-        label: L().folded(last.length),
+        label: fit(L().folded(last.length), cols - 4), // Claude Code draws a "[-]" mark at the end of the first row
         plain: true,
         dimColor: true,
         onPress: async () => { await setCollapsed($, false) },
@@ -1150,18 +1165,24 @@ export function register(on, options) {
       return Box({ flexDirection: "column", children: [folded, ...past, theirs] })
     }
     // The tag is a coloured chip (Button children may be strings and Text); one press anywhere on the row adds it.
-    const rows = last.map((item, i) => Button({
-      key: "fu-" + i,
-      plain: true,
-      hotkey: String(i + 1), // the engine draws "N: " before the children, so the row text carries no number of its own
-      dimColor: used.has(i),
-      onPress: async () => { await addIndexes($, [i]) },
-      children: [
-        (used.has(i) ? "✓ " : "  "),
-        Text({ color: TAG_COLORS[item.tag], bold: !used.has(i), dimColor: used.has(i), children: ["[" + T.tags[item.tag] + "]"] }),
-        " " + (i === 0 ? "★ " : "") + (isRisky(item.text) ? "⚠ " : "") + item.text,
-      ],
-    }))
+    // Only the label is cut to the band's width, less the "N: " the engine draws for the hotkey; a press still adds the full text.
+    const rows = last.map((item, i) => {
+      const head = used.has(i) ? "✓ " : "  "
+      const chip = "[" + T.tags[item.tag] + "]"
+      const marks = " " + (i === 0 ? "★ " : "") + (isRisky(item.text) ? "⚠ " : "")
+      return Button({
+        key: "fu-" + i,
+        plain: true,
+        hotkey: String(i + 1), // the engine draws "N: " before the children, so the row text carries no number of its own
+        dimColor: used.has(i),
+        onPress: async () => { await addIndexes($, [i]) },
+        children: [
+          head,
+          Text({ color: TAG_COLORS[item.tag], bold: !used.has(i), dimColor: used.has(i), children: [chip] }),
+          marks + fit(item.text, cols - 3 - head.length - chip.length - marks.length),
+        ],
+      })
+    })
     // The "insert all" button follows the state of the rows: full colour while there is something to add,
     // "N còn lại" once some rows are used, and dim with a check mark (and a no-op press) once every row is in.
     const remaining = last.length - used.size
@@ -1170,11 +1191,11 @@ export function register(on, options) {
       ? [Button({
           key: "fu-all",
           hotkey: "0",
-          label: allDone
+          label: fit(allDone
             ? T.insertedAll(last.length)
             : used.size
               ? T.insertRest(remaining)
-              : T.insertAll(last.length),
+              : T.insertAll(last.length), cols - 3), // less the "0: " the engine draws for the hotkey
           plain: true,
           dimColor: allDone,
           onPress: async () => { await addIndexes($, last.map((_, i) => i)) },
@@ -1182,25 +1203,23 @@ export function register(on, options) {
       : []
     const hide = Button({
       key: "fu-hide",
-      label: T.hide(last.length),
+      label: fit(T.hide(last.length), cols),
       plain: true,
       dimColor: true,
       onPress: async () => { await setCollapsed($, true) },
     })
+    const title = allDone
+      ? Text({ color: "green", bold: true, children: [fit(T.headerAllDone(last.length), cols - 4)] })
+      : restored && Date.now() - menuAt >= FRESH_MS
+        ? Text({ color: "cyan", bold: true, children: [fit(T.headerRestored(T.ago(Math.floor((Date.now() - menuAt) / 60000))), cols - 4)] })
+        : Text({ color: "cyan", bold: true, children: [fit(T.header, cols - 4)] })
+    // With `maxRows` too small for everything, drop the least important lines first (Hide, insert-all, title), then the last rows.
+    let lines = [title, ...rows, ...all, hide]
+    const cap = Number.isFinite(props.maxRows) && props.maxRows > 0 ? props.maxRows : Infinity
+    for (const drop of [hide, ...all, title]) if (lines.length > cap) lines = lines.filter((l) => l !== drop)
     return Box({
       flexDirection: "column",
-      children: [
-        allDone
-          ? Text({ color: "green", bold: true, children: [T.headerAllDone(last.length)] })
-          : restored && Date.now() - menuAt >= FRESH_MS
-            ? Text({ color: "cyan", bold: true, children: [T.headerRestored(T.ago(Math.floor((Date.now() - menuAt) / 60000)))] })
-            : Text({ color: "cyan", bold: true, children: [T.header] }),
-        ...rows,
-        ...all,
-        hide,
-        ...past,
-        theirs,
-      ],
+      children: [...lines.slice(0, cap), ...past, theirs],
     })
   })
 
@@ -1302,6 +1321,8 @@ export function register(on, options) {
     if (epoch !== mine) return next(e)
     await persist($)
     await redraw($)
+    // A collapsed band hides the menu: say it is there. The state is the one the last render reported.
+    if (last.length && bandCollapsed) { try { await $.ui.toast(L().toastCollapsed(last.length)) } catch (err) { /* only a courtesy */ } }
     // Debug aid: with FOLLOWUP_SUGGEST_DEBUG=1 the raw menu is also printed under the answer (useful in claude -p).
     if (debug === "1") return { text: "[debug] via " + source + " raw=" + JSON.stringify(String(text).slice(0, 700)) + " parsed=" + parsed.length + " tune=" + afterTune + " paths=" + afterPaths + " skills=" + (skills ? skills.split("\n").length : 0) + " final=" + last.length }
     return next(e)

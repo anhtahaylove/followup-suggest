@@ -98,11 +98,29 @@ test('the session fork supplies the menu: tags, star on the first row, no transc
   const r: any = await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   expect(r?.text).toBeFalsy()
   const b = await band($)
-  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại toàn bộ test')
-  expect(b).toContain('2. [bước tiếp] Xem diff của file cấu hình')
-  expect(b).toContain('3. [bàn giao] Chuẩn bị mô tả PR')
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
+  expect(b).toContain('[bước tiếp] Xem diff của file cấu hình')
+  expect(b).toContain('[bàn giao] Chuẩn bị mô tả PR')
   expect(b).toContain('Chèn tất cả 3 gợi ý')
   expect(seen.haikuCalls).toBe(0)
+})
+
+test('band rows carry digit hotkeys 1..N and insert-all carries 0; the row text holds no number of its own', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const buttons: any[] = []
+  const walk = (n: any) => { if (n && typeof n === 'object') { if (n.type === 'Button') buttons.push(n); (n.children ?? []).forEach(walk) } }
+  walk(await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: {} }))
+  const hotkeys = Object.fromEntries(buttons.map((b) => [b.props.key, b.props.hotkey]))
+  expect(hotkeys['fu-0']).toBe('1')
+  expect(hotkeys['fu-1']).toBe('2')
+  expect(hotkeys['fu-2']).toBe('3')
+  expect(hotkeys['fu-all']).toBe('0')
+  expect(hotkeys['fu-hide']).toBeUndefined()
+  // The engine draws "1: " before a plain Button's children; a number in the text would double it.
+  expect(buttons.find((b) => b.props.key === 'fu-0').props.label).toBe('  [kiểm chứng] ★ Chạy lại toàn bộ test của thay đổi này')
 })
 
 test('the count is not fixed: one suggestion gets no insert-all row', async ($, on) => {
@@ -111,7 +129,7 @@ test('the count is not fixed: one suggestion gets no insert-all row', async ($, 
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   const b = await band($)
-  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại test')
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại test')
   expect(b).not.toContain('Chèn tất cả')
 })
 
@@ -122,8 +140,8 @@ test('more than five lines are cut to five', async ($, on) => {
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   const b = await band($)
-  expect(b).toContain('5. [bước tiếp] Việc số 5')
-  expect(b).not.toContain('6. ')
+  expect(b).toContain('[bước tiếp] Việc số 5')
+  expect(b).not.toContain('"hotkey":"6"')
 })
 
 test('/fu 2 adds that prompt and the band stays, marked as used', async ($, on) => {
@@ -134,8 +152,8 @@ test('/fu 2 adds that prompt and the band stays, marked as used', async ($, on) 
   await $.command.run({ command: 'fu', args: '2' })
   expect(seen.draft).toBe('Xem diff của file cấu hình')
   const b = await band($)
-  expect(b).toContain('✓ 2. [bước tiếp] Xem diff')
-  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại toàn bộ test')
+  expect(b).toContain('✓ [bước tiếp] Xem diff')
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
 })
 
 test('several picks accumulate in the draft and /fu all numbers them', async ($, on) => {
@@ -310,9 +328,9 @@ test('drops placeholder/ellipsis lines and duplicates; untagged lines count as n
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 500 })
   const b = await band($)
-  expect(b).toContain('1. [bước tiếp] ★ Chạy test')
-  expect(b).toContain('2. [bước tiếp] Xem diff')
-  expect(b).not.toContain('3. ')
+  expect(b).toContain('[bước tiếp] ★ Chạy test')
+  expect(b).toContain('[bước tiếp] Xem diff')
+  expect(b).not.toContain('"hotkey":"3"')
 })
 
 test('falls back to Haiku when the fork cannot answer', async ($, on) => {
@@ -322,7 +340,7 @@ test('falls back to Haiku when the fork cannot answer', async ($, on) => {
   await $.turn.complete({ answer: ANSWER, durationMs: 500 })
   expect(seen.forkCalls).toBe(1)
   expect(seen.haikuCalls).toBe(1)
-  expect(await band($)).toContain('1. [kiểm chứng] ★ Chạy lại test')
+  expect(await band($)).toContain('[kiểm chứng] ★ Chạy lại test')
 })
 
 test('reports a model failure visibly instead of failing silently', async ($, on) => {
@@ -425,8 +443,8 @@ test('/fu show brings a hidden band back with the same menu and check marks', as
   await $.command.run({ command: 'fu', args: 'show' })
   const b = await band($)
   expect(b).toContain('Gợi ý tiếp theo')
-  expect(b).toContain('✓ 2. [bước tiếp] Xem diff')
-  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại toàn bộ test')
+  expect(b).toContain('✓ [bước tiếp] Xem diff')
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
   expect(b).not.toContain('Gợi ý đang ẩn')
 })
 
@@ -438,7 +456,7 @@ test('picking from the keyboard while the band is hidden opens it again', async 
   await $.command.run({ command: 'fu', args: 'hide' })
   await $.command.run({ command: 'fu', args: '1' })
   expect(seen.draft).toBe('Chạy lại toàn bộ test của thay đổi này')
-  expect(await band($)).toContain('✓ 1. [kiểm chứng]')
+  expect(await band($)).toContain('✓ [kiểm chứng]')
 })
 
 test('a hidden band stays hidden across a reload, and a new turn or prompt drops it', async ($, on) => {
@@ -514,7 +532,7 @@ test('learned adjustments reach the model and are enforced locally', async ($, o
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   expect(seen.forkPrompt).toContain('do not output any NEXT line')
   const b = await band($)
-  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại test')
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại test')
   expect(b).not.toContain('Xem diff')
 })
 
@@ -603,8 +621,8 @@ test('after a reload the saved band comes back, with its check marks', async ($,
   stubs(on, 'NONE', null, seen)
   const b = await band($)
   expect(b).toContain('Gợi ý tiếp theo')
-  expect(b).toContain('✓ 1. [kiểm chứng]')
-  expect(b).toContain('2. [bước tiếp] Thêm lệnh y')
+  expect(b).toContain('✓ [kiểm chứng]')
+  expect(b).toContain('[bước tiếp] Thêm lệnh y')
 })
 
 test('a band saved hours ago comes back after exit + resume, labelled with its age, and /fu off is remembered', async ($, on) => {
@@ -616,7 +634,7 @@ test('a band saved hours ago comes back after exit + resume, labelled with its a
   stubs(on, THREE, null, seen)
   await start($)
   const b = await band($)
-  expect(b).toContain('1. [kiểm chứng] ★ Đọc lại file x')
+  expect(b).toContain('[kiểm chứng] ★ Đọc lại file x')
   expect(b).toContain('từ lần trước, 3 giờ trước')
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   expect(seen.forkCalls).toBe(0)
@@ -756,8 +774,8 @@ test('a hot reload keeps the check marks of rows that are still in the box', asy
   }
   stubs(on, 'NONE', null, seen)
   const b = await band($)
-  expect(b).toContain('✓ 1. [bước tiếp]')
-  expect(b).not.toContain('✓ 2.')
+  expect(b).toContain('✓ [bước tiếp]')
+  expect(b.match(/"label":"✓ \[/g)).toHaveLength(1) // only the row still in the box keeps its mark
 })
 
 test('a checked row whose text left the box is added again on /fu, without counting as a second use', async ($, on) => {
@@ -771,7 +789,7 @@ test('a checked row whose text left the box is added again on /fu, without count
   expect(seen.draft).toBe('Xem diff của file cấu hình')
   seen.draft = '' // the user cleared the box: the real editor event removes the UI mark
   await $.prompt.change({ text: '', cursor: 0, origin: { kind: 'clear' } })
-  expect(await band($)).not.toContain('✓ 2.')
+  expect(await band($)).not.toContain('"label":"✓ [')
   await $.command.run({ command: 'fu', args: '2' })
   expect(seen.draft).toBe('Xem diff của file cấu hình')
   expect(((seen.store.stats as any).used || {}).NEXT).toBe(1)
@@ -785,7 +803,7 @@ test('a check mark survives extra spaces the user typed inside the row text', as
     last: [{ tag: 'NEXT', text: 'Viết đặc tả cho module dich/ngon_ngu' }], used: [0],
   }
   stubs(on, 'NONE', null, seen)
-  expect(await band($)).toContain('✓ 1. [bước tiếp]')
+  expect(await band($)).toContain('✓ [bước tiếp]')
 })
 
 test('a menu that finishes after the user already sent the next prompt is thrown away', async ($, on) => {
@@ -928,8 +946,8 @@ test('the row cap set with /fu rows reaches the model prompt', async ($, on) => 
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   expect(seen.forkPrompt).toContain('Output at most 2 lines.')
   const b = await band($)
-  expect(b).toContain('2. [')
-  expect(b).not.toContain('3. [')
+  expect(b).toContain('"hotkey":"2"')
+  expect(b).not.toContain('"hotkey":"3"')
 })
 
 // ---- i18n (2.0) ---------------------------------------------------------------------------------------------------
@@ -941,9 +959,9 @@ test('i18n: with no language set and no prompt yet the UI is English', async ($,
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   const b = await band($)
   expect(b).toContain('Suggested next')
-  expect(b).toContain('1. [verify] ★ Chạy lại toàn bộ test')
-  expect(b).toContain('2. [next]')
-  expect(b).toContain('3. [handoff]')
+  expect(b).toContain('[verify] ★ Chạy lại toàn bộ test')
+  expect(b).toContain('[next]')
+  expect(b).toContain('[handoff]')
   expect(b).toContain('Insert all 3')
   expect(b).not.toContain('Gợi ý tiếp theo')
 })
@@ -1041,7 +1059,7 @@ test('a notification turn keeps the band on screen; a menu it writes moves the o
   await $.prompt.submit({ text: 'Background command "build" completed (exit code 0)', isMeta: true, origin: { kind: 'task-notification' } })
   await $.turn.start({ turnId: 't-note' })
   let b = await band($)
-  expect(b).toContain('1. [kiểm chứng] ★ Chạy lại toàn bộ test')
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
   expect(b).not.toContain('Gợi ý đã đưa')
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   const r: any = await $.command.run({ command: 'fu', args: 'log' })
@@ -1334,12 +1352,12 @@ test('a check mark goes away as soon as its text leaves the input box (cleared o
   expect(b).toContain('Chèn tất cả 3 gợi ý')
   // Ctrl+U or Backspace is an edit: only the row whose text left the box loses its mark.
   await $.command.run({ command: 'fu', args: '1 2' })
-  expect(await band($)).toContain('✓ 1.')
+  expect(await band($)).toContain('✓ [kiểm chứng]')
   seen.draft = '1. Chạy lại toàn bộ test của thay đổi này'
   await $.prompt.edit({ origin: { kind: 'person' }, text: seen.draft + '\n2. Xem diff', cursor: 0, start: 0, end: 0, inputText: '' })
   b = await band($)
-  expect(b).toContain('✓ 1.')
-  expect(b).not.toContain('✓ 2.')
+  expect(b).toContain('✓ [kiểm chứng]')
+  expect(b).not.toContain('✓ [bước tiếp]')
 })
 
 test('a one-row menu does not offer /fu 1 3 or /fu all in its footer', async ($, on) => {
@@ -1383,8 +1401,8 @@ test('a VERIFY row about a path the turn already read back is dropped; unread pa
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   const b = await band($)
   expect(b).not.toContain('confirm the port')
-  expect(b).toContain('1. [kiểm chứng] ★ Read back C:/Users/me/app/other.json')
-  expect(b).toContain('2. [bước tiếp] Add a comment to C:/Users/me/app/config.json')
+  expect(b).toContain('[kiểm chứng] ★ Read back C:/Users/me/app/other.json')
+  expect(b).toContain('[bước tiếp] Add a comment to C:/Users/me/app/config.json')
 })
 
 test('a read before the last edit of that file, a read in an earlier turn or in a subagent does not count', async ($, on) => {

@@ -1153,10 +1153,11 @@ export function register(on, options) {
     const rows = last.map((item, i) => Button({
       key: "fu-" + i,
       plain: true,
+      hotkey: String(i + 1), // the engine draws "N: " before the children, so the row text carries no number of its own
       dimColor: used.has(i),
       onPress: async () => { await addIndexes($, [i]) },
       children: [
-        (used.has(i) ? "✓ " : "  ") + (i + 1) + ". ",
+        (used.has(i) ? "✓ " : "  "),
         Text({ color: TAG_COLORS[item.tag], bold: !used.has(i), dimColor: used.has(i), children: ["[" + T.tags[item.tag] + "]"] }),
         " " + (i === 0 ? "★ " : "") + (isRisky(item.text) ? "⚠ " : "") + item.text,
       ],
@@ -1168,6 +1169,7 @@ export function register(on, options) {
     const all = last.length > 1
       ? [Button({
           key: "fu-all",
+          hotkey: "0",
           label: allDone
             ? T.insertedAll(last.length)
             : used.size

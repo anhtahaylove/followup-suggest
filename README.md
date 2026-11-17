@@ -26,6 +26,9 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
   the answer (3500 characters), your latest request and the matching commands.
 - Silence is a normal result: explanations, factual answers and closed decisions get no menu.
 - A menu that arrives after you already sent the next prompt, switched the mod off or ran `/fu forget` is discarded.
+- The band fits its pane: in a narrow pane a row is cut with `…` to the band's width (a click still adds the full text),
+  and when the band is given too few rows the Hide line, then the insert-all line, are dropped first. If you collapsed
+  the band (Ctrl+X, then Ctrl+A), a new menu shows a short toast instead of arriving unnoticed.
 - Each row has a tag: **verify** (check or read back what was just produced), **next** (the smallest reversible next
   step), **handoff** (prepare a reviewable result) or **needs input** (the task is blocked on information only you have).
 - Model output is treated as untrusted. Before a row is shown:
@@ -58,7 +61,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 
 ## Install
 
-Requires Claude Code with the mods API. Version 2.0.5 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
+Requires Claude Code with the mods API. Version 2.0.6 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
 `model.fork` API the mod prints one notice and stays off for the session.
 
 From the marketplace in this repository (this one command adds the marketplace and installs the plugin):

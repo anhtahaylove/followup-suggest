@@ -222,6 +222,12 @@ export function computeTuning(stats, rowsOverride, lang) {
   const pos = s.pos || {}
   const total = sumValues(shown)
   const out = { ready: total >= MIN_SHOWN_TOTAL, hideTags: [], maxItems: MAX_ITEMS, notes: [] }
+  const manual = Number(rowsOverride)
+  const hasManual = Number.isInteger(manual) && manual >= 1 && manual <= MAX_ITEMS
+  if (hasManual) {
+    out.maxItems = manual
+    out.notes.push(T.tuneManualRows(manual))
+  }
   if (!out.ready) {
     out.notes.push(T.tuneNotReady(total, MIN_SHOWN_TOTAL))
     return out
@@ -235,11 +241,7 @@ export function computeTuning(stats, rowsOverride, lang) {
     }
   }
   const picks = sumValues(pos)
-  const manual = Number(rowsOverride)
-  if (Number.isInteger(manual) && manual >= 1 && manual <= MAX_ITEMS) {
-    out.maxItems = manual
-    out.notes.push(T.tuneManualRows(manual))
-  } else if (picks >= MIN_PICKS_FOR_CAP) {
+  if (!hasManual && picks >= MIN_PICKS_FOR_CAP) {
     const top = (Number(pos["0"]) || 0) + (Number(pos["1"]) || 0)
     if (top / picks >= TOP_ROWS_SHARE) {
       out.maxItems = 3
@@ -404,14 +406,73 @@ function noteToolCall(e) {
   if (turnChecks.length > MAX_TURN_CHECKS) turnChecks.shift()
 }
 
+// Parse only simple shell clauses. Never infer execution from a path in prose, quoted command text, a pipeline,
+// substitution, redirection or an unsupported wrapper. Unknown syntax keeps the VERIFY row rather than hiding it.
+function shellEvidence(command) {
+  const text = String(command)
+  if (text.length > 4000 || /[$`<>]|\|/.test(text)) return []
+  const clauses = []
+  let words = [], word = "", quote = ""
+  const pushWord = () => { if (word) words.push(word); word = "" }
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (quote) {
+      if (ch === quote) quote = ""
+      else word += ch
+    } else if (ch === '"' || ch === "'") quote = ch
+    else if (ch === ";" || ch === "\n" || (ch === "&" && text[i + 1] === "&")) {
+      pushWord(); clauses.push(words); words = []
+      if (ch === "&") i++
+    } else if (ch === "&" || ch === "(" || ch === ")") return []
+    else if (/\s/.test(ch)) pushWord()
+    else word += ch
+  }
+  if (quote) return []
+  pushWord(); clauses.push(words)
+  const evidence = []
+  for (const tokens of clauses) {
+    let [exe, ...args] = tokens
+    if (!exe) continue
+    exe = exe.split("/").pop().replace(/\.exe$/, "")
+    let kind = ""
+    if (["cat", "type", "head", "tail", "get-content", "gc"].includes(exe)) kind = "read"
+    else {
+      // Peel known package-runner forms only; never search an arbitrary command's arguments for a runner name.
+      if (["npx", "npm", "pnpm", "yarn", "bun"].includes(exe)) {
+        if (args[0] === "exec") args.shift()
+        if (args[0] === "test") { args.shift(); exe = "test-runner" }
+        else if (["vitest", "jest", "mocha", "tsx", "ts-node"].includes(args[0])) exe = args.shift()
+      }
+      if (/^python(?:3(?:\.\d+)?)?$/.test(exe) && args[0] === "-m" && args[1] === "pytest") {
+        exe = "pytest"; args = args.slice(2)
+      }
+      if (["node", "python", "python3", "tsx", "ts-node", "deno"].includes(exe)) {
+        if (exe === "deno" && args[0] === "run") args.shift()
+        // Only the script itself executes; another path passed as its data argument does not.
+        if (args[0] && !args[0].startsWith("-")) args = [args[0]]
+        else continue
+        kind = "run"
+      } else if (["vitest", "jest", "mocha", "pytest", "test-runner"].includes(exe)) {
+        if (args[0] === "run") args.shift()
+        // Unknown options can name configs or outputs, not test targets. Refuse to guess their values.
+        if (args.some((a) => a.startsWith("-") && a !== "--")) continue
+        kind = "run"
+      }
+    }
+    if (kind) for (const p of args.filter((a) => !a.startsWith("-"))) evidence.push({ [kind]: normPath(p) })
+  }
+  return evidence
+}
+
 export function dropAlreadyChecked(items, checks) {
   if (!checks || !checks.length) return items
+  const evidence = checks.flatMap((c) => c.run ? shellEvidence(c.run) : [c])
   return items.filter((item) => {
     if (item.tag !== "VERIFY") return true
     const paths = extractPaths(item.text).filter((p) => existsTarget(p)).map(normPath)
     if (!paths.length) return true
     const runs = RUN_WORDS.test(withoutPaths(item.text).toLowerCase())
-    return !paths.every((p) => checks.some((c) => (c.read === p && !runs) || (c.run && isFileName(p) && mentions(c.run, p))))
+    return !paths.every((p) => evidence.some((c) => (c.read === p && !runs) || (c.run === p && isFileName(p))))
   })
 }
 
@@ -484,8 +545,25 @@ export function dropUnknownCommands(items, known) {
   })
 }
 
-function rememberUserText(text) {
+// An oversized request must not disappear. Keep its ends and complete constraint clauses; if a clause is not
+// representable by the local verb guard, or those clauses overflow, persist a fail-closed marker as well.
+const INCOMPLETE_CONTEXT = "[followup context incomplete: stay silent]"
+const CONSTRAINT_CUE = /\b(?:do\s+not|don['’]?t|never|without|only|must|cannot|can['’]?t|no|not|require[ds]?)\b|không|khong|đừng|dung|cấm|tránh|chỉ/iu
+const SIMPLE_PROHIBITION = /^(?:do\s+not|don['’]?t|never|không|khong|đừng|dung|cấm|tránh)\s+\p{L}+/iu
+export function budgetUserText(text) {
   const t = String(text ?? "").trim()
+  if (t.length <= MAX_USER_TEXT) return t
+  const constraints = t.split(/(?<=[.!?;])\s+|\n+/u).filter((s) => CONSTRAINT_CUE.test(s))
+  const kept = constraints.join("\n")
+  const unsafe = t.includes(INCOMPLETE_CONTEXT) || kept.length > 1600
+    || constraints.some((s) => !SIMPLE_PROHIBITION.test(s.trim()) || !forbiddenVerbs(s).length
+      || /\b(?:and|or|but|unless|until|except)\b|[,;]|và|hoặc/iu.test(s))
+  const middle = (unsafe ? INCOMPLETE_CONTEXT + "\n" : "") + kept.slice(0, 1600)
+  return t.slice(0, 1100) + "\n[context omitted]\n" + middle + "\n[context omitted]\n" + t.slice(-1100)
+}
+
+function rememberUserText(text) {
+  const t = budgetUserText(text)
   if (!t || t.startsWith("/")) return
   recentUser.push(t)
   while (recentUser.length > 4 || recentUser.join("\n").length > MAX_USER_TEXT) recentUser.shift()
@@ -541,9 +619,9 @@ export function pickIndexes(args, count) {
 // is switched on. Module scope so the top-level helpers below can reach them.
 let last = []
 let used = new Set()
-// Rows of this menu whose check mark left with the box text. Sending empties the box (prompt.change) before
-// prompt.submit runs, so the history still needs to know they were inserted.
-let dropped = new Set()
+// Rows counted once for this menu, independently of whether their text is still in the draft.
+// Also preserves insertion history when the editor clears the box before prompt.submit.
+let counted = new Set()
 let enabled = true
 // "Hide" folds the band into one dim line instead of throwing the menu away, so a mis-click is undoable
 // (click the line or /fu show). A new turn replaces the menu anyway, so `collapsed` never outlives it.
@@ -591,25 +669,35 @@ async function attended($) {
 const worthKeeping = (rec) => !!rec && typeof rec === "object" && Date.now() - Number(rec.at) < KEEP_MS &&
   ((Array.isArray(rec.last) && rec.last.length > 0) || (Array.isArray(rec.history) && rec.history.length > 0) || rec.enabled === false)
 
+// Band writes and forget deletions share one FIFO. An already-dispatched store.set cannot
+// be cancelled by an epoch check; deletion must run after it, before newer valid writes.
+let stateWrites = Promise.resolve()
 async function persist($) {
-  try {
-    if (!await attended($)) return
-    if (!sid) sid = String(await $.session.id())
-    const key = "band:" + sid
-    await $.store.set(key, { at: Date.now(), menuAt, last, used: [...used], enabled, collapsed, recentUser, history })
-    const index = (await $.store.get("bands")) || []
-    if (index[index.length - 1] === key) return
-    // The index changed (a new session, or this one moved to the end): prune it while we are at it.
-    const kept = []
-    for (const k of index) {
-      if (k === key) continue
-      if (worthKeeping(await $.store.get(k))) kept.push(k)
-      else await $.store.delete(k)
-    }
-    kept.push(key)
-    while (kept.length > MAX_STORED_SESSIONS) await $.store.delete(kept.shift())
-    await $.store.set("bands", kept)
-  } catch (err) { /* persistence must never get in the way */ }
+  const mine = epoch
+  const saved = { at: Date.now(), menuAt, last, used: [...used], counted: [...counted], enabled, collapsed, recentUser: [...recentUser], history: [...history] }
+  const pending = stateWrites.then(async () => {
+    try {
+      if (epoch !== mine || !await attended($) || epoch !== mine) return
+      if (!sid) sid = String(await $.session.id())
+      if (epoch !== mine) return
+      const key = "band:" + sid
+      await $.store.set(key, saved)
+      const index = (await $.store.get("bands")) || []
+      if (index[index.length - 1] === key) return
+      // The index changed (a new session, or this one moved to the end): prune it while we are at it.
+      const kept = []
+      for (const k of index) {
+        if (k === key) continue
+        if (worthKeeping(await $.store.get(k))) kept.push(k)
+        else await $.store.delete(k)
+      }
+      kept.push(key)
+      while (kept.length > MAX_STORED_SESSIONS) await $.store.delete(kept.shift())
+      await $.store.set("bands", kept)
+    } catch (err) { /* persistence must never get in the way */ }
+  })
+  stateWrites = pending
+  await pending
 }
 
 // Is a suggestion's text (its opening words) in the input box right now? A check mark means "it is in the box", so it
@@ -629,7 +717,6 @@ async function syncMarks($, text) {
   const draft = normText(text)
   const kept = new Set([...used].filter((i) => last[i] && inDraft(draft, last[i])))
   if (kept.size === used.size) return
-  for (const i of used) if (!kept.has(i)) dropped.add(i)
   used = kept
   await persist($)
   await redraw($)
@@ -638,6 +725,7 @@ async function syncMarks($, text) {
 async function ensureLoaded($) {
   if (loaded) return
   loaded = true
+  const mine = epoch
   try {
     const setting = await $.store.get("lang")
     if (setting === "en" || setting === "vi") langSetting = setting
@@ -647,8 +735,11 @@ async function ensureLoaded($) {
   try {
     sid = String(await $.session.id())
     const saved = await $.store.get("band:" + sid)
-    if (!saved || typeof saved !== "object") return
-    if (Array.isArray(saved.recentUser)) recentUser = saved.recentUser.filter((t) => typeof t === "string").slice(-4)
+    if (epoch !== mine || !saved || typeof saved !== "object") return
+    if (Array.isArray(saved.recentUser)) {
+      recentUser = []
+      for (const t of saved.recentUser.filter((t) => typeof t === "string").slice(-4)) rememberUserText(t)
+    }
     if (saved.enabled === false) enabled = false
     if (Array.isArray(saved.history)) {
       history = saved.history
@@ -663,10 +754,12 @@ async function ensureLoaded($) {
       menuAt = Number(saved.menuAt) || Number(saved.at)
       restored = last.length > 0
       used = new Set((saved.used || []).filter((n) => Number.isInteger(n) && n >= 0 && n < last.length))
+      counted = new Set([...(saved.counted || []), ...used].filter((n) => Number.isInteger(n) && n >= 0 && n < last.length))
       collapsed = saved.collapsed === true && last.length > 0
       if (used.size) {
         // Keep a check mark only for a row that is still in the box (a hot reload keeps the draft; exit + resume empties it).
         const draft = await draftText($)
+        if (epoch !== mine) return
         used = new Set([...used].filter((i) => inDraft(draft, last[i])))
         await persist($)
       }
@@ -683,7 +776,7 @@ function archiveCurrent(submitted) {
   const items = last.map((it, i) => ({
     tag: it.tag,
     text: it.text,
-    state: !used.has(i) && !dropped.has(i) ? "unused" : (sub && sub.includes(norm(it.text).slice(0, 40)) ? "sent" : "inserted"),
+    state: !counted.has(i) ? "unused" : (sub && sub.includes(norm(it.text).slice(0, 40)) ? "sent" : "inserted"),
   }))
   history.push({ at: Date.now(), items })
   while (history.length > MAX_HISTORY) history.shift()
@@ -694,7 +787,7 @@ async function clear($, archive, submitted) {
   if (archive) archiveCurrent(submitted)
   last = []
   used = new Set()
-  dropped = new Set()
+  counted = new Set()
   collapsed = false
   menuAt = 0
   restored = false
@@ -780,9 +873,9 @@ async function addIndexes($, indexes) {
   const parts = fresh.length === 1 ? [last[fresh[0]].text] : fresh.map((i, n) => (n + 1) + ". " + last[i].text)
   await addToDraft($, parts)
   for (const i of fresh) {
-    const again = used.has(i)
     used.add(i)
-    if (again) continue // already counted when it was first taken
+    if (counted.has(i)) continue // already counted when it was first taken
+    counted.add(i)
     await bump($, "used", last[i].tag)
     if (last[i].text.startsWith("/")) await bump($, "slash", "used")
     await bump($, "pos", String(i))
@@ -869,8 +962,42 @@ export function register(on, options) {
   })
 
   on("command.run", { command: "fu" }, async ($, e) => {
-    await ensureLoaded($)
     const word = String(e.args ?? "").trim().toLowerCase()
+    if (word === "forget" || word === "quên") {
+      // Start loading settings, but invalidate its band restore and all older model work.
+      const loading = ensureLoaded($)
+      epoch += 1
+      last = []
+      used = new Set()
+      counted = new Set()
+      collapsed = false
+      history = []
+      recentUser = []
+      menuAt = 0
+      restored = false
+      logOpen = false
+      // Reserve the delete before any await. New-generation persists queue behind it;
+      // older writes already in flight finish first and cannot resurrect forgotten data.
+      // Only bands are removed: statistics and row/language settings are kept.
+      let count = 0
+      const pending = stateWrites.then(async () => {
+        try {
+          if (!sid) sid = String(await $.session.id())
+          const keys = new Set([...((await $.store.get("bands")) || []), "band:" + sid])
+          for (const k of keys) {
+            if (await $.store.get(k)) count += 1
+            await $.store.delete(k)
+          }
+          await $.store.delete("bands")
+        } catch (err) { /* whatever could be deleted is gone */ }
+      })
+      stateWrites = pending
+      await loading
+      await pending
+      await redraw($)
+      return { text: L().forgot(count) }
+    }
+    await ensureLoaded($)
     if (word === "off" || word === "tắt") {
       enabled = false
       epoch += 1
@@ -919,31 +1046,6 @@ export function register(on, options) {
       }
       await $.store.set("rows", n)
       return { text: L().rowsSet(n) }
-    }
-    if (word === "forget" || word === "quên") {
-      // Deletes every stored session (menus, history, recent prompts) and this session's state; statistics and the
-      // row/language settings are kept (/fu reset clears the statistics).
-      let count = 0
-      try {
-        if (!sid) sid = String(await $.session.id())
-        const keys = new Set([...((await $.store.get("bands")) || []), "band:" + sid])
-        for (const k of keys) {
-          if (await $.store.get(k)) count += 1
-          await $.store.delete(k)
-        }
-        await $.store.delete("bands")
-      } catch (err) { /* whatever could be deleted is gone */ }
-      last = []
-      used = new Set()
-      dropped = new Set()
-      collapsed = false
-      history = []
-      recentUser = []
-      menuAt = 0
-      restored = false
-      logOpen = false
-      await redraw($)
-      return { text: L().forgot(count) }
     }
     if (word === "reset") {
       try { await $.store.delete("stats") } catch (err) { /* nothing stored */ }
@@ -1105,7 +1207,7 @@ export function register(on, options) {
     if (e.agentId || e.isAborted) return next(e)
     const mine = epoch // before any await: whatever the user does from here on makes this menu stale
     await ensureLoaded($)
-    if (!enabled) return next(e)
+    if (epoch !== mine || !enabled || recentUser.some((t) => t.includes(INCOMPLETE_CONTEXT))) return next(e)
 
     const answer = String(e.answer ?? "").trim()
     if (answer.length < MIN_ANSWER_CHARS) return next(e)
@@ -1122,7 +1224,7 @@ export function register(on, options) {
     // 1) the session model through a cached fork (sees the whole task); 2) Haiku over the final answer if that fails.
     const tuning = computeTuning(await loadStats($), await loadRows($), currentLang())
     // Anchor the menu on the user's LATEST request: leftovers from earlier turns are what made a real session drift.
-    const latest = recentUser.length ? recentUser[recentUser.length - 1].slice(0, 700) : ""
+    const latest = recentUser.length ? recentUser[recentUser.length - 1] : ""
     const anchor = latest
       ? "\nThe user's latest request, which every suggestion must continue (ignore leftovers from earlier turns): " + JSON.stringify(latest)
       : ""
@@ -1136,8 +1238,9 @@ export function register(on, options) {
     if (debug === "1") { try { $.ui.log("followup-suggest: command.list=" + (commands ? commands.length : "unreadable") + " described=" + (skills ? skills.split(String.fromCharCode(10)).length : 0)) } catch (err) { /* debug aid only */ } }
 
     let source = "fork"
-    if (forkUnavailable) return next(e)
+    if (epoch !== mine || forkUnavailable) return next(e)
     let text = await askFork($, hint)
+    if (epoch !== mine) return next(e) // do not start a fallback or emit notices for forgotten work
     if (text === FORK_UNAVAILABLE) {
       forkUnavailable = true
       return { text: L().needsNewer }
@@ -1154,8 +1257,10 @@ export function register(on, options) {
           timeoutMs: 20000,
         })
       } catch (err) {
+        if (epoch !== mine) return next(e)
         return { text: L().modelError(String((err && err.message) || err).slice(0, 120)) }
       }
+      if (epoch !== mine) return next(e)
       if (!r || !r.isAnswered) {
         return { text: L().modelSilent(String((r && r.reason) || L().unknownReason).slice(0, 120)) }
       }
@@ -1170,6 +1275,7 @@ export function register(on, options) {
     let items = parsed.filter((it) => !tuning.hideTags.includes(it.tag))
     const afterTune = items.length
     items = await dropMissingPaths($, items)
+    if (epoch !== mine) return next(e) // grounding is asynchronous too; forget/new prompts still invalidate it
     const afterPaths = items.length
     items = dropAlreadyChecked(items, turnChecks)
     items = dropCoveredByAnswer(items, answer)
@@ -1180,7 +1286,7 @@ export function register(on, options) {
     archiveCurrent()
     last = items.slice(0, tuning.maxItems)
     used = new Set()
-    dropped = new Set()
+    counted = new Set()
     collapsed = false
     menuAt = Date.now()
     restored = false
@@ -1191,6 +1297,7 @@ export function register(on, options) {
       await bump($, "silent", "n")
     }
     if (skills) await bump($, "slash", "offered") // turns in which at least one skill was described to the model
+    if (epoch !== mine) return next(e)
     await persist($)
     await redraw($)
     // Debug aid: with FOLLOWUP_SUGGEST_DEBUG=1 the raw menu is also printed under the answer (useful in claude -p).

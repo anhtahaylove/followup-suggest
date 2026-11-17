@@ -1,5 +1,7 @@
 # followup-suggest
 
+Version 2.0.5.
+
 A [Claude Code](https://code.claude.com) mod that suggests what to ask next. After a substantial answer it shows 0 to 5
 follow-up prompts in a band right above the input box. Click a row to add that prompt to your draft, review it, press
 Enter. Nothing is ever sent for you.
@@ -23,7 +25,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
   and the limits you set. If the fork cannot answer within 60 seconds, Haiku is asked instead; it sees only the end of
   the answer (3500 characters), your latest request and the matching commands.
 - Silence is a normal result: explanations, factual answers and closed decisions get no menu.
-- A menu that arrives after you already sent the next prompt (or switched the mod off) is discarded.
+- A menu that arrives after you already sent the next prompt, switched the mod off or ran `/fu forget` is discarded.
 - Each row has a tag: **verify** (check or read back what was just produced), **next** (the smallest reversible next
   step), **handoff** (prepare a reviewable result) or **needs input** (the task is blocked on information only you have).
 - Model output is treated as untrusted. Before a row is shown:
@@ -34,10 +36,11 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
     "không push") is dropped;
   - a verify row naming a file path that does not exist is dropped (a path stops at the first space, so paths with
     spaces are not checked reliably);
-  - a verify row is dropped when the turn that just finished already checked every file it names: a Read of the file,
-    or a Bash or PowerShell command naming it, after the last edit of that file in the turn. A row asking to run or test
-    something needs such a command; a Read is not enough. Directories, subagents' tool calls and earlier turns do not
-    count;
+  - a verify row is dropped when the turn that just finished already checked every file it names after its last edit.
+    `Read`, `cat`, `type`, `Get-Content`, `head` and `tail` can establish content reads, not execution. A row asking to run
+    or test needs a recognized runtime/test runner targeting that file. Simple `&&`, semicolon and newline clauses are
+    checked separately; mere path mentions, pipelines, substitutions, redirections and unsupported syntax are not
+    execution evidence. Directories, subagents' tool calls and earlier turns do not count;
   - a next or handoff row naming a file that your latest request does not mention is dropped as off-topic;
   - a row that repeats at least 80% of the words of one list item of the answer is dropped (rows under 4 words are kept);
   - a `/command` row is kept only if the session has that command.
@@ -55,7 +58,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 
 ## Install
 
-Requires Claude Code with the mods API. Developed and tested on Claude Code 2.1.306. On an older version without the
+Requires Claude Code with the mods API. Version 2.0.5 is tested on Claude Code 2.1.311 (also pinned in CI). On an older version without the
 `model.fork` API the mod prints one notice and stays off for the session.
 
 From the marketplace in this repository (this one command adds the marketplace and installs the plugin):
@@ -96,7 +99,8 @@ is off).
 Vietnamese aliases: `tắt` (off), `bật` (on), `ẩn` (hide), `hiện` (show), `lịch sử` (log), `thống kê` (stats),
 `điều chỉnh` (tune), `dòng N|tự-động` (rows), `ngôn-ngữ` (lang), `quên` (forget), `tất cả` (all). A ✓ on a row means its
 text is in the input box now: it goes away as soon as you clear the box or edit that text out, and after a resume or
-reload the marks are checked against the box again.
+reload the marks are checked against the box again. Usage is counted only once per row per menu, even if you clear,
+reinsert or restore it. Saved menus from older versions use their saved check marks to seed this count.
 
 `auto` language detection looks for letters that only Vietnamese uses; a Vietnamese prompt typed without diacritics is
 read as English.
@@ -108,7 +112,7 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
 - a **next** or **handoff** tag that was shown at least 10 times and that you took less than 8% of the time is no longer
   offered. It stays hidden until `/fu reset`;
 - if at least 15 picks were made and at least 85% of them were rows 1-2, menus are capped at 3 rows. Setting
-  `/fu rows N` replaces this cap.
+  `/fu rows N` replaces this cap and takes effect even before 20 suggestions have been shown.
 
 **verify** and **needs input** are never hidden. `/fu tune` explains what is active.
 
@@ -117,9 +121,14 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
 - Everything stays on your machine, in Claude Code's plugin store (`~/.claude/plugins/store/`, JSON files named
   `followup-suggest_*.json`; installing from the marketplace and loading with `--plugin-dir` use different files, so
   statistics and settings do not carry over between the two). Nothing is sent anywhere except the model calls below.
-- Per session the store keeps the current menu, the last 30 menus, and your last 4 prompts (at most 4000 characters,
-  used to respect what you forbade). Sessions are kept for 30 days, at most 100 of them. Usage statistics, the row
-  limit and the language choice are kept without a time limit. `/fu forget` deletes the per-session data at once.
+- Per session the store keeps the current menu, the last 30 menus, and up to 4 recent prompts (at most 4000 characters
+  in total, used to respect what you forbade). Oversized requests retain their first/last 1100 characters and up to 1600
+  characters of detected constraint clauses. If these clauses overflow or cannot be represented by the local verb
+  guard, the mod stays silent while that incomplete context remains in recent history, including after resume.
+  The entire retained latest request anchors both the fork and fallback; constraint detection is heuristic, not a
+  general natural-language permission system. Sessions are kept for 30 days, at most 100 of them. Usage statistics,
+  the row limit and language choice have no time limit. `/fu forget` deletes the per-session data and invalidates
+  pending menu work in the current session; it does not stop another already-running session from recording new data.
 - Each answer of 60 characters or more costs one extra model call (a cached fork of your session), or two when the fork
   fails and Haiku is asked instead. The call is made before the filters, so a menu that ends up empty still costs it.
 - Unattended runs (`claude -p`, scripts) make no model call and write nothing. With `FOLLOWUP_SUGGEST_DEBUG=1` they do
@@ -161,7 +170,10 @@ claude plugin validate .
 claude plugin test
 ```
 
-The mod is `hooks/register.js`, loaded through `hooks/hooks.json`; the stubbed tests are in `tests/`. See
+The mod is `hooks/register.js`, loaded through `hooks/hooks.json`; the stubbed tests are in `tests/`. They exercise the
+real hook module but stub model/tool/store boundaries: they make no live inference calls and do not prove model quality.
+For local testing alongside a live install, set `CLAUDE_CONFIG_DIR` to a scratch directory and configure its `pluginDirs`
+to point only at the test worktree; never point tests at your live plugin store. See
 [CHANGELOG.md](CHANGELOG.md) for the history.
 
 ## License

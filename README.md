@@ -96,6 +96,10 @@ Clicking a row, the insert-all line or the folded line does the same as the matc
 the usage line while a menu is shown; without a menu `/fu` only says that there are no suggestions yet (or that the mod
 is off).
 
+While a band is shown, a bare digit pressed in an empty input box does the same: `1`-`5` adds that row, `0` adds all
+of them. Claude Code consumes that digit, so a prompt that starts with a digit loses its first character while a band is
+on screen; `/fu off` avoids it.
+
 Vietnamese aliases: `tắt` (off), `bật` (on), `ẩn` (hide), `hiện` (show), `lịch sử` (log), `thống kê` (stats),
 `điều chỉnh` (tune), `dòng N|tự-động` (rows), `ngôn-ngữ` (lang), `quên` (forget), `tất cả` (all). A ✓ on a row means its
 text is in the input box now: it goes away as soon as you clear the box or edit that text out, and after a resume or

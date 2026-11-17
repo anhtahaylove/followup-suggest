@@ -4,6 +4,9 @@ All notable changes to this project. Versions before 2.0 were private builds.
 
 ## Unreleased
 
+- Digit hotkeys on the band: with the input box empty, `1`-`5` adds that row and `0` inserts all rows (Claude Code draws
+  `N:` before each row, so the row text no longer carries its own number). Trade-off: while a band is on screen, a bare
+  digit typed first in an empty box is consumed by the band instead of starting your prompt; `/fu off` avoids it. The hotkeys are on by default, with no setting to turn them off.
 - Pin CI and the documented tested version to Claude Code 2.1.326 (was 2.1.311).
 
 ## 2.0.5 (2026-10-27)

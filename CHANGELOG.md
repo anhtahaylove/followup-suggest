@@ -2,6 +2,10 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## Unreleased
+
+- Pin CI and the documented tested version to Claude Code 2.1.326 (was 2.1.311).
+
 ## 2.0.5 (2026-10-27)
 
 - Count a row once per menu independently of its draft check mark. Clearing or editing the draft, reinserting the row,

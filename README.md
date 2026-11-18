@@ -1,6 +1,6 @@
 # followup-suggest
 
-Version 2.0.5.
+Version 2.0.7.
 
 A [Claude Code](https://code.claude.com) mod that suggests what to ask next. After a substantial answer it shows 0 to 5
 follow-up prompts in a band right above the input box. Click a row to add that prompt to your draft, review it, press
@@ -25,6 +25,9 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
   and the limits you set. If the fork cannot answer within 60 seconds, Haiku is asked instead; it sees only the end of
   the answer (3500 characters), your latest request and the matching commands.
 - Silence is a normal result: explanations, factual answers and closed decisions get no menu.
+- No model call is made after a turn that was interrupted, refused or ended by an API error, or while a background
+  subagent the main conversation started is still working: its report starts a new turn, and that turn gets the menu.
+- While a survey holds the band (it answers bare digits), the band steps aside and comes back once the survey is gone.
 - A menu that arrives after you already sent the next prompt, switched the mod off or ran `/fu forget` is discarded.
 - The band fits its pane: in a narrow pane a row is cut with `…` to the band's width (a click still adds the full text),
   and when the band is given too few rows the Hide line, then the insert-all line, are dropped first. If you collapsed
@@ -61,7 +64,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 
 ## Install
 
-Requires Claude Code with the mods API. Version 2.0.6 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
+Requires Claude Code with the mods API. Version 2.0.7 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
 `model.fork` API the mod prints one notice and stays off for the session.
 
 From the marketplace in this repository (this one command adds the marketplace and installs the plugin):
@@ -161,7 +164,8 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
   `[debug]` line with the first 700 characters of the model output and row counts after each stage: `parsed` (after the
   cleaning, length and danger checks), `tune` (after hidden tags), `paths` (after the missing-path check) and `final`
   (after the already-checked, repeat, forbidden-action, off-topic and command checks and the row limit). `skills` is the number of
-  commands described to the model. Turns that end before the model call (short answer, mod off) print no line.
+  commands described to the model. Turns that end before the model call (short answer, mod off, an error or refused
+  turn, a background subagent still working) print no line.
 - The reply to `/fu` starts with `followup-suggest+ponytail:` (or another name after the `+`): Claude Code labels the
   reply with every mod it ran together with this one. The text after the colon is this mod's own; nothing is wrong.
 

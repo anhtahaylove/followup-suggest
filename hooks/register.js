@@ -677,6 +677,17 @@ async function attended($) {
   return attendedCache
 }
 
+// A subagent the main loop started is still at work (a background Agent call): the main loop picks up again when it
+// reports back, and that turn's menu is the one worth showing; asking now pays for premature suggestions. Teammates and
+// agents a plugin spawned run on their own schedule and do not hold the menu back. Unreadable list = nobody busy.
+async function backgroundAgentsBusy($) {
+  try {
+    const agents = await $.agent.list()
+    return Array.isArray(agents) && agents.some((a) => a && !a.parentId && !a.spawnedBy && !a.teammateId &&
+      a.kind !== "in_process_teammate" && ["pending", "running", "waiting"].includes(a.status))
+  } catch (err) { return false }
+}
+
 // A record is worth a slot only if resuming the session would show something: a menu, its history, or /fu off.
 const worthKeeping = (rec) => !!rec && typeof rec === "object" && Date.now() - Number(rec.at) < KEEP_MS &&
   ((Array.isArray(rec.last) && rec.last.length > 0) || (Array.isArray(rec.history) && rec.history.length > 0) || rec.enabled === false)
@@ -1151,6 +1162,8 @@ export function register(on, options) {
     const T = L()
     const props = e.props || {}
     bandCollapsed = props.isCollapsed === true
+    // A survey holds the band and answers bare digits: yield to it, so a digit reaches the survey and not a row.
+    if (props.hasSurvey) return theirs
     const cols = props.bodyColumns
     const past = historyNodes($, Text, Button, !last.length, cols)
     if (!last.length) return past.length ? Box({ flexDirection: "column", children: [...past, theirs] }) : theirs
@@ -1224,8 +1237,8 @@ export function register(on, options) {
   })
 
   on("turn.complete", async ($, e, next) => {
-    // Main conversation only; skip subagents and interrupted turns.
-    if (e.agentId || e.isAborted) return next(e)
+    // Main conversation only; skip subagents and turns that did not end in an answer (interrupted, refused, API error).
+    if (e.agentId || e.isAborted || (e.reason && e.reason !== "answer")) return next(e)
     const mine = epoch // before any await: whatever the user does from here on makes this menu stale
     await ensureLoaded($)
     if (epoch !== mine || !enabled || recentUser.some((t) => t.includes(INCOMPLETE_CONTEXT))) return next(e)
@@ -1241,6 +1254,7 @@ export function register(on, options) {
     // Unreadable surfaces means an older Claude Code: treat it as unattended rather than pay for a menu nobody may see.
     try { surfaces = await $.session.surfaces() } catch (err) { surfaces = [] }
     if (!surfaces.length && debug !== "1") return next(e)
+    if (await backgroundAgentsBusy($)) return next(e)
 
     // 1) the session model through a cached fork (sees the whole task); 2) Haiku over the final answer if that fails.
     const tuning = computeTuning(await loadStats($), await loadRows($), currentLang())

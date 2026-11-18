@@ -29,7 +29,8 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
   subagent the main conversation started is still working: its report starts a new turn, and that turn gets the menu.
 - While a survey holds the band (it answers bare digits), the band steps aside and comes back once the survey is gone.
 - A menu that arrives after you already sent the next prompt, switched the mod off or ran `/fu forget` is discarded.
-- The band fits its pane: in a narrow pane a row is cut with `…` to the band's width (a click still adds the full text),
+- The band fits its pane: in a narrow pane a row is cut with `…` to the band's width, counted in terminal cells (wide
+  East Asian letters and emoji take two, combining marks none; a click still adds the full text),
   and when the band is given too few rows the Hide line, then the insert-all line, are dropped first. If you collapsed
   the band (Ctrl+X, then Ctrl+A), a new menu shows a short toast instead of arriving unnoticed.
 - Each row has a tag: **verify** (check or read back what was just produced), **next** (the smallest reversible next

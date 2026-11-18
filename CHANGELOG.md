@@ -12,6 +12,9 @@ All notable changes to this project. Versions before 2.0 were private builds.
 - No model call while a background subagent the main conversation started is still pending, running or waiting
   (`$.agent.list()`): its report starts a new turn, and that turn gets the menu. Teammates, nested agents and agents a
   plugin spawned do not hold the menu back. Idea from the next-steps mod in hamzafer/claude-code-mods.
+- Band labels are cut to `bodyColumns` in terminal cells instead of characters. Wide East Asian letters, full-width
+  forms and emoji take two cells and no longer make a cut row wrap; combining marks (decomposed Vietnamese) take none
+  and no longer cut a row that fits. Idea from the next-steps mod's `displayWidth`.
 
 ## 2.0.6 (2026-11-17)
 

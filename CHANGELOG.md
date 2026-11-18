@@ -15,6 +15,15 @@ All notable changes to this project. Versions before 2.0 were private builds.
 - Band labels are cut to `bodyColumns` in terminal cells instead of characters. Wide East Asian letters, full-width
   forms and emoji take two cells and no longer make a cut row wrap; combining marks (decomposed Vietnamese) take none
   and no longer cut a row that fits. Idea from the next-steps mod's `displayWidth`.
+- Model output is parsed past Markdown noise: emphasis around a tag (`**VERIFY:**`, `- **NEXT**:`) no longer turns the
+  row into an untagged "next" row with stray stars, bold words lose their stars (a glob such as `src/**` stays), and a
+  code fence with a language name (```` ```text ````) no longer becomes a one-word row.
+- Not rows: untagged preamble and closing lines ("Here are some follow-ups:", "No further follow-ups.", "Dưới đây là
+  …"), any line ending in a colon, and lines in the assistant's own voice ("I will …", "Would you like …", "Tôi sẽ …",
+  "Bạn có muốn …"), which a user would not send as they stand.
+- Sanitizing: text with Unicode tag characters is refused instead of only stripped, blank Hangul filler letters are
+  removed, and combining marks past three in a row are cut (decomposed Vietnamese needs two). Ideas from the next-steps
+  plugin in anthropics/claude-plugins-community.
 
 ## 2.0.6 (2026-11-17)
 

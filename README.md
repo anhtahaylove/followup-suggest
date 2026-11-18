@@ -36,7 +36,11 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 - Each row has a tag: **verify** (check or read back what was just produced), **next** (the smallest reversible next
   step), **handoff** (prepare a reviewable result) or **needs input** (the task is blocked on information only you have).
 - Model output is treated as untrusted. Before a row is shown:
-  - terminal escapes, control, bidi and invisible characters are stripped (also from menus restored from the store);
+  - terminal escapes, control, bidi and invisible characters, blank Hangul fillers and combining marks past three in a
+    row are stripped (also from menus restored from the store); text carrying Unicode tag characters is dropped;
+  - Markdown emphasis around a tag or words (`**VERIFY:**`, `**all**`) is read past, code fences are skipped, and a
+    preamble or closing line ("Here are some follow-ups:", "No further follow-ups."), a line ending in a colon and a
+    line in the assistant's voice ("I will …", "Would you like …", "Tôi sẽ …") are not rows;
   - a row longer than 160 characters (file paths not counted) or 500 characters in all, or containing `...`, `…` or
     `[...]`, is dropped;
   - a row whose first two words include an action you forbade in one of your last 4 prompts ("do not run", "never push",

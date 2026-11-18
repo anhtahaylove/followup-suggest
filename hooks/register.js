@@ -488,12 +488,19 @@ const SKILL_NAME_MAX = 64
 const SKILL_DESC_MAX = 110
 const SKILLS_LISTED = 25
 const SKILLS_BUDGET = 3500
-const UNSEEN = /[\p{Cc}\p{Cf}\p{Cn}\p{Co}\p{Cs}\p{Variation_Selector}]/gu
+// Hangul fillers are letters that draw nothing; a run of combining marks past three only stacks glyphs (two cover
+// decomposed Vietnamese). Unicode tag characters have no use in a prompt except to hide one, so such text is refused.
+// Ideas from the sanitizer of the next-steps plugin in anthropics/claude-plugins-community.
+const UNSEEN = /[\p{Cc}\p{Cf}\p{Cn}\p{Co}\p{Cs}\p{Variation_Selector}ᅟᅠㅤﾠ]/gu
+const TAG_CHARS = /[\u{e0000}-\u{e007f}]/u
+const COMBINING_RUN = /(\p{M}{3})\p{M}+/gu
 
-// One line of printable text: terminal escapes, control/format/private characters (this includes the invisible "tag"
-// characters) removed, whitespace folded, length capped by code point.
+// One line of printable text: terminal escapes, control/format/private and blank characters removed, whitespace folded,
+// combining runs capped, length capped by code point; "" for text carrying tag characters.
 export function cleanText(text, max) {
-  const safe = String(text ?? "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\s+/g, " ").replace(UNSEEN, "").trim()
+  const raw = String(text ?? "")
+  if (TAG_CHARS.test(raw)) return ""
+  const safe = raw.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\s+/g, " ").replace(UNSEEN, "").replace(COMBINING_RUN, "$1").replace(/ {2,}/g, " ").trim()
   const points = [...safe]
   return points.length > max ? points.slice(0, max - 1).join("") + "…" : safe
 }
@@ -574,27 +581,40 @@ function rememberUserText(text) {
 // Model text is untrusted: it goes into button labels and the input box, so terminal escapes (CSI and OSC, e.g.
 // hyperlinks), control, bidi and invisible characters are stripped before any other check.
 const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+// Markdown bold around words ("Run **all** tests"); not a glob such as src/**/*.ts.
+const BOLD = /(?<![\w/*])\*\*(?=[^\s*])(.+?)(?<=[^\s*])\*\*(?![\w/*])/g
+// The assistant's own voice ("I will add ...", "Tôi sẽ ...", "Would you like ...") is not a prompt the user would send.
+const AGENT_VOICE = /^(?:i['’]ll|i will|shall i|would you like|do you want|tôi sẽ|để tôi|bạn có muốn)(?=[\s,.!?]|$)/iu
 export function cleanLine(raw) {
   const safe = cleanText(String(raw ?? "").replace(OSC, ""), 2000)
-  const text = safe.replace(/^(?:[-*•]|\d+[.)])\s*/, "").replace(/^["'`\s]+|["'`\s]+$/g, "")
+  // Emphasis stars left at either end (*Run the tests*) go too; a trailing glob (src/**) stays.
+  const text = safe.replace(/^(?:[-*•]|\d+[.)])\s*/, "").replace(BOLD, "$1").replace(/^["'`*\s]+|["'`\s]+$/g, "").replace(/(?<![/*])\*+$/, "").trim()
   // File paths do not count towards the length limit (the rules ask for full absolute paths).
   const lengthWithoutPaths = withoutPaths(text).length
   if (!text || /^none\b/i.test(text) || lengthWithoutPaths > 160 || text.length > 500 || /\.\.\.|…|\[.*\]/.test(text)) return ""
+  // A line ending in a colon introduces something else: it is not sendable as it stands.
+  if (/:[*_]*$/.test(text) || AGENT_VOICE.test(text)) return ""
   return text
 }
 
-// One model line -> { tag, text } or null. An untagged line counts as NEXT.
+// Untagged framing around the menu: a preamble, or a line saying there is nothing to suggest.
+const FRAMING = /^(?:here(?:['’]s| is| are)\b|sure\b|certainly\b|of course\b|no (?:further |more |other )?(?:follow[- ]?ups?|suggestions?|next steps?)\b|nothing\b|dưới đây|sau đây|không có gợi ý|không cần thêm)/iu
+
+// One model line -> { tag, text } or null. An untagged line counts as NEXT. Markdown emphasis around the tag
+// (**VERIFY:**, - **NEXT**:) is read past.
 export function parseLine(line) {
-  const m = /^\s*(?:[-*•]|\d+[.)])?\s*(VERIFY|NEXT|HANDOFF|INPUT)\s*[:|–-]\s*(.+)$/i.exec(String(line ?? ""))
+  const m = /^\s*(?:[-*•]|\d+[.)])?\s*[*_]*(VERIFY|NEXT|HANDOFF|INPUT)[*_]*\s*[:|–-]\s*(?:\*{1,2}|_{1,2})?\s*(.+)$/i.exec(String(line ?? ""))
   const tag = m ? m[1].toUpperCase() : "NEXT"
   const text = cleanLine(m ? m[2] : line)
-  return text ? { tag, text } : null
+  if (!text || (!m && FRAMING.test(text))) return null
+  return { tag, text }
 }
 
 export function parsePrompts(raw) {
   const seen = new Set()
   const out = []
   for (const line of String(raw ?? "").split("\n")) {
+    if (/^\s*```/.test(line)) continue // a code fence, with or without a language name
     const item = parseLine(line)
     if (!item || seen.has(item.text)) continue
     seen.add(item.text)

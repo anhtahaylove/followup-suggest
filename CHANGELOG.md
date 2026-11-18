@@ -2,6 +2,17 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.7 (unreleased)
+
+- The band steps aside while a survey holds it (`e.props.hasSurvey`). Claude Code's surveys answer bare digits, which
+  the band's digit hotkeys would otherwise compete for; the band comes back once the survey is gone.
+- No model call after a turn that ended in a refusal or an API error (`e.reason` other than `answer`), as already for
+  interrupted turns. Such a turn's "answer" is an error text, and the fork would usually hit the same error before the
+  Haiku fallback paid for a second call.
+- No model call while a background subagent the main conversation started is still pending, running or waiting
+  (`$.agent.list()`): its report starts a new turn, and that turn gets the menu. Teammates, nested agents and agents a
+  plugin spawned do not hold the menu back. Idea from the next-steps mod in hamzafer/claude-code-mods.
+
 ## 2.0.6 (2026-11-17)
 
 - The band now fits its pane. The title, each row, the insert-all line, the Hide line and the history lines are cut with

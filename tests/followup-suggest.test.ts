@@ -8,6 +8,7 @@ type Seen = {
   commandsGate?: () => Promise<void>; haikuGate?: () => Promise<void>; haikuThrows?: boolean
   storeSetGate?: (key: string) => Promise<void>; storeDeleteGate?: (key: string) => Promise<void>
   fallbackSystem?: string; commands?: Array<{ name: string; description: string; source: string }>
+  agents?: Array<Record<string, unknown>>
 }
 
 // Stubs answer in Claude Code's place, in the shape the test kit asks for per event.
@@ -40,6 +41,7 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
     if (seen.commandsGate) await seen.commandsGate()
     return { value: seen.commands ?? [] }
   })
+  on('agent.list', () => ({ value: seen.agents ?? [] }))
   on('store.delete', async (_api: unknown, e: { key: string }) => {
     if (seen.storeDeleteGate) await seen.storeDeleteGate(e.key)
     delete seen.store[e.key]
@@ -452,6 +454,55 @@ test('ignores short answers, subagent turns and aborted turns', async ($, on) =>
   await $.turn.complete({ answer: 'x'.repeat(200), agentId: 'sub-1', durationMs: 10 })
   await $.turn.complete({ answer: 'y'.repeat(200), isAborted: true, durationMs: 10 })
   expect(seen.forkCalls + seen.haikuCalls).toBe(0)
+})
+
+test('turns that ended in a refusal or an API error pay for no model call; an answer does', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, 'NEXT: x', seen)
+  await start($)
+  await $.turn.complete({ answer: 'API Error: the request exceeded the context window of the model. '.repeat(2), reason: 'error', isAborted: false, durationMs: 10 })
+  await $.turn.complete({ answer: 'z'.repeat(200), reason: 'refusal', refusal: { category: null, explanation: null }, isAborted: false, durationMs: 10 })
+  expect(seen.forkCalls + seen.haikuCalls).toBe(0)
+  expect(await band($)).not.toContain('kiểm chứng')
+  await $.turn.complete({ answer: ANSWER, reason: 'answer', isAborted: false, durationMs: 10 })
+  expect(seen.forkCalls).toBe(1)
+  expect(await band($)).toContain('[kiểm chứng]')
+})
+
+test('a background subagent of the main loop still at work holds the menu back until it reports', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, 'NEXT: x', seen)
+  await start($)
+  seen.agents = [{ id: 'a1', description: 'scan', type: 'general-purpose', status: 'running', kind: 'local_agent' }]
+  await $.turn.complete({ answer: ANSWER, durationMs: 10 })
+  seen.agents = [{ id: 'a1', description: 'scan', type: 'general-purpose', status: 'waiting', kind: 'local_agent' }]
+  await $.turn.complete({ answer: ANSWER, durationMs: 10 })
+  expect(seen.forkCalls + seen.haikuCalls).toBe(0)
+  expect(await band($)).not.toContain('kiểm chứng')
+  // Finished agents, teammates, nested and plugin-spawned agents do not hold it back.
+  seen.agents = [
+    { id: 'a1', status: 'completed', kind: 'local_agent' },
+    { id: 't1', status: 'running', kind: 'in_process_teammate', teammateId: 'rev@team' },
+    { id: 'a2', status: 'running', kind: 'local_agent', parentId: 'a9' },
+    { id: 'a3', status: 'running', kind: 'local_agent', spawnedBy: 'other-mod' },
+  ]
+  await $.turn.complete({ answer: ANSWER, durationMs: 10 })
+  expect(seen.forkCalls).toBe(1)
+  expect(await band($)).toContain('[kiểm chứng]')
+})
+
+test('the band yields to a survey: no rows and no digit hotkeys while one holds it, back afterwards', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const during = await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: true } })
+  expect(JSON.stringify(during)).toContain('base')
+  expect(JSON.stringify(during)).not.toContain('kiểm chứng')
+  expect(keyed(during).some((n: any) => n.hotkey)).toBe(false)
+  const after = await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false } })
+  expect(JSON.stringify(after)).toContain('[kiểm chứng]')
+  expect(keyed(after).some((n: any) => n.hotkey === '1')).toBe(true)
 })
 
 test('/fu with nothing stored says so and fills nothing', async ($, on) => {

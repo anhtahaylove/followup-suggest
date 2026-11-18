@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeTuning, extractPaths, dropCoveredByAnswer, answerListLines, forbiddenVerbs, dropForbidden, dropOffTopic, STRINGS, detectLang, parseLine, cleanLine, existsTarget, isRisky, dropAlreadyChecked } from '../hooks/register.js'
+import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeTuning, extractPaths, dropCoveredByAnswer, answerListLines, forbiddenVerbs, dropForbidden, dropOffTopic, STRINGS, detectLang, parseLine, cleanLine, existsTarget, isRisky, dropAlreadyChecked, displayWidth } from '../hooks/register.js'
 
 type Seen = {
   forkCalls: number; haikuCalls: number; draft: string; fills: string[]; attended?: string; forkThrows?: boolean
@@ -173,6 +173,47 @@ test('a narrow band cuts the row label to bodyColumns but a press still inserts 
   // A click and /fu 1 both go through addIndexes, which reads the stored suggestion, not the label.
   await $.command.run({ command: 'fu', args: '1' })
   expect(seen.draft).toBe(LONG)
+})
+
+test('displayWidth counts terminal cells: wide letters and emoji take two, combining marks none', () => {
+  expect(displayWidth('abc')).toBe(3)
+  expect(displayWidth('漢字テスト')).toBe(10)
+  expect(displayWidth('한국어')).toBe(6)
+  expect(displayWidth('Ｆｕｌｌ')).toBe(8)
+  expect(displayWidth('✅ done')).toBe(7)
+  expect(displayWidth('Tiếng Việt')).toBe(10)
+  expect(displayWidth('Tiếng Việt'.normalize('NFD'))).toBe(10)
+  // The band's own marks are one cell wide in common terminals.
+  expect(displayWidth('✓ ★ ⚠ ✕ ⏎ ➤ ✎')).toBe(13)
+})
+
+test('a wide-character suggestion is cut to the band width in cells, not in characters', async ($, on) => {
+  const seen = fresh()
+  const WIDE_TEXT = 'テストをもう一度全部実行して結果を前回の実行と比べてください'
+  stubs(on, 'NEXT: ' + WIDE_TEXT, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const tree = await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: { bodyColumns: 40 } })
+  const row = keyed(tree).find((n: any) => n.key === 'fu-0')
+  // 40 cells less the engine's "1: ".
+  expect(displayWidth(row.label)).toBeLessThanOrEqual(37)
+  expect(displayWidth(row.label)).toBeGreaterThanOrEqual(36)
+  expect(row.label.endsWith('…')).toBe(true)
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(seen.draft).toBe(WIDE_TEXT)
+})
+
+test('decomposed Vietnamese that fits the band is not cut early by its combining marks', async ($, on) => {
+  const seen = fresh()
+  const NFD = 'Xem lại tệp cấu hình'.normalize('NFD')
+  stubs(on, 'NEXT: ' + NFD, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  // Room for the text: 37 cells less "  [bước tiếp] ★ " (16) = 21; the text is 20 cells but 26 code points.
+  const tree = await $.ui.render({ component: 'AbovePrompt', surface: 'terminal', props: { bodyColumns: 40 } })
+  const row = keyed(tree).find((n: any) => n.key === 'fu-0')
+  expect(row.label.endsWith(NFD)).toBe(true)
+  expect(row.label).not.toContain('…')
 })
 
 test('narrow bodyColumns also fits the title and the footer', async ($, on) => {

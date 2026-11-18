@@ -661,12 +661,31 @@ async function redraw($) {
   try { await $.ui.invalidate("ui.render") } catch (err) { /* the band refreshes on the next event anyway */ }
 }
 
-// Cut a label to `cols` columns (the band's `e.props.bodyColumns`) with an ellipsis so it never wraps; no width = unchanged.
+// Terminal cells a string takes: wide East Asian letters and emoji drawn as emoji take two, combining marks and
+// zero-width characters none (decomposed Vietnamese, ZWJ, variation selectors). Where it guesses, it guesses wide, so a
+// label is cut a little early rather than wrapped. Idea from displayWidth in the next-steps mod of hamzafer/claude-code-mods.
+const ZERO_WIDTH = /[\p{M}​-‏⁠︀-️]/u
+const WIDE = /[\p{Emoji_Presentation}ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u
+const cellWidth = (ch) => ZERO_WIDTH.test(ch) ? 0 : WIDE.test(ch) ? 2 : 1
+export function displayWidth(text) {
+  let width = 0
+  for (const ch of String(text ?? "")) width += cellWidth(ch)
+  return width
+}
+
+// Cut a label to `cols` cells (the band's `e.props.bodyColumns`) with an ellipsis so it never wraps; no width = unchanged.
 function fit(s, cols) {
   if (!Number.isFinite(cols)) return s
-  const chars = Array.from(s)
   const room = Math.max(cols, 1)
-  return chars.length > room ? chars.slice(0, room - 1).join("") + "…" : s
+  if (displayWidth(s) <= room) return s
+  let out = ""
+  let width = 0
+  for (const ch of s) {
+    width += cellWidth(ch)
+    if (width > room - 1) break
+    out += ch
+  }
+  return out + "…"
 }
 
 // `surfaces()` is empty in an unattended run; if it cannot be read, assume someone is watching.
@@ -1192,7 +1211,7 @@ export function register(on, options) {
         children: [
           head,
           Text({ color: TAG_COLORS[item.tag], bold: !used.has(i), dimColor: used.has(i), children: [chip] }),
-          marks + fit(item.text, cols - 3 - head.length - chip.length - marks.length),
+          marks + fit(item.text, cols - 3 - displayWidth(head + chip + marks)),
         ],
       })
     })

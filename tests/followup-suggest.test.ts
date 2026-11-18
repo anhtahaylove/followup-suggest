@@ -9,6 +9,7 @@ type Seen = {
   storeSetGate?: (key: string) => Promise<void>; storeDeleteGate?: (key: string) => Promise<void>
   fallbackSystem?: string; commands?: Array<{ name: string; description: string; source: string }>
   agents?: Array<Record<string, unknown>>
+  debug?: string
 }
 
 // Stubs answer in Claude Code's place, in the shape the test kit asks for per event.
@@ -21,7 +22,8 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
   on('prompt.submit', (_api: unknown, e: unknown) => e)
   on('turn.start', (_api: unknown, e: unknown) => e)
   on('command.register', () => ({ value: undefined }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', (_api: unknown, e: { name: string }) => ({ value: e.name === 'FOLLOWUP_SUGGEST_DEBUG' ? seen.debug : undefined }))
+  on('prompt.attachment', (_api: unknown, e: { text: string }) => ({ text: e.text }))
   on('session.surfaces', () => {
     if (seen.attended === 'throw') throw new Error('unknown method session.surfaces')
     return { value: seen.attended === '0' ? [] : ['terminal'] }
@@ -1016,6 +1018,68 @@ test('a slash command typed while the menu is being written does not throw it aw
   release()
   await pending
   expect(await band($)).toContain('kiểm chứng')
+})
+
+// The terminal raises prompt.submit at Enter for a prompt typed while a turn runs, with that turn's id.
+const typedDuringTurn = ($: any, text: string) => $.prompt.submit({ text, turnId: 't1', wait: false, origin: { kind: 'composer' } })
+
+test('a prompt typed during the turn holds the menu back: no model call, and the turn it starts gets one', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, THREE, seen)
+  await start($)
+  await typedDuringTurn($, 'Thêm test cho hàm parse')
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls + seen.haikuCalls).toBe(0)
+  expect(await band($)).not.toContain('kiểm chứng')
+  await $.turn.start({ turnId: 't2' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(1)
+  expect(await band($)).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
+})
+
+test('with no prompt typed during the turn the menu comes as before', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.prompt.submit({ text: 'Sửa hàm parse', origin: { kind: 'composer' } }) // submitted while idle: no turnId
+  await $.turn.start({ turnId: 't1' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(1)
+  expect(await band($)).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
+})
+
+test('a prompt the running turn took in between tool calls does not hold the menu back', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await typedDuringTurn($, 'Thêm test cho hàm parse')
+  await $.prompt.attachment({ type: 'queued_command', text: 'The user sent a new message while you were working:\nThêm test cho hàm parse' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(1)
+  expect(await band($)).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
+})
+
+test('slash commands and notifications arriving during the turn do not hold the menu back', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.prompt.submit({ text: '/fu stats', command: 'fu', turnId: 't1', wait: false, origin: { kind: 'composer' } })
+  await $.prompt.submit({ text: 'Background command finished', isMeta: true, turnId: 't1', wait: false, origin: { kind: 'task-notification' } })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(1)
+})
+
+test('an unattended debug run names the skip: [debug] skipped=queued', async ($, on) => {
+  const seen = fresh()
+  seen.attended = '0'
+  seen.debug = '1'
+  stubs(on, THREE, null, seen)
+  await start($)
+  await typedDuringTurn($, 'Thêm test cho hàm parse')
+  const r: any = await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(0)
+  expect(r?.text).toContain('[debug] skipped=queued')
+  expect(seen.store['stats']).toBeUndefined() // nothing shown, nothing counted
 })
 
 const SESSION_COMMANDS = [

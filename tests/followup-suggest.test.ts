@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeTuning, extractPaths, dropCoveredByAnswer, answerListLines, forbiddenVerbs, dropForbidden, dropOffTopic, STRINGS, detectLang, parseLine, cleanLine, existsTarget, isRisky, dropAlreadyChecked, displayWidth } from '../hooks/register.js'
+import { pickSkills, knownCommandNames, dropUnknownCommands, cleanText, computeTuning, extractPaths, dropCoveredByAnswer, answerListLines, forbiddenVerbs, dropForbidden, dropOffTopic, STRINGS, detectLang, parseLine, parsePrompts, cleanLine, existsTarget, isRisky, dropAlreadyChecked, displayWidth } from '../hooks/register.js'
 
 type Seen = {
   forkCalls: number; haikuCalls: number; draft: string; fills: string[]; attended?: string; forkThrows?: boolean
@@ -1302,6 +1302,67 @@ test('fix 1: model text loses terminal escapes, control, bidi and invisible char
   const item: any = parseLine('VERIFY: Read \x1b[31mback\x1b[0m the \u202Efile\u202C now\x07 \u200Bplease')
   expect(item.text).toBe('Read back the file now please')
   expect(cleanLine('\x1b]8;;evil\x07Run the tests\x1b]8;;\x07')).toBe('Run the tests')
+})
+
+test('markdown emphasis around the tag or the words is read past, a glob is kept', () => {
+  expect(parseLine('**VERIFY:** Run the tests for parse.ts')).toEqual({ tag: 'VERIFY', text: 'Run the tests for parse.ts' })
+  expect(parseLine('- **NEXT**: Add the missing error message')).toEqual({ tag: 'NEXT', text: 'Add the missing error message' })
+  expect(parseLine('__HANDOFF__ – Prepare the PR description')).toEqual({ tag: 'HANDOFF', text: 'Prepare the PR description' })
+  expect(parseLine('*INPUT*: Which port should the server use')).toEqual({ tag: 'INPUT', text: 'Which port should the server use' })
+  expect(cleanLine('Run **all** the tests')).toBe('Run all the tests')
+  expect(cleanLine('*Run the tests again*')).toBe('Run the tests again')
+  expect(cleanLine('Run the linter on C:/app/src/**')).toBe('Run the linter on C:/app/src/**')
+  expect(cleanLine('Format C:/app/src/**/*.ts and C:/app/lib/**/*.ts')).toBe('Format C:/app/src/**/*.ts and C:/app/lib/**/*.ts')
+})
+
+test('framing lines, code fences, colon endings and the assistant voice are not rows', () => {
+  const raw = [
+    'Here are some follow-ups:',
+    '```text',
+    '**Suggested next steps:**',
+    'VERIFY: Run the tests for the parser change',
+    'NEXT: I will add the missing test',
+    'NEXT: Tôi sẽ thêm test còn thiếu',
+    'Would you like me to open a PR',
+    'Bạn có muốn tôi tạo PR không',
+    'NEXT: Do the following:',
+    '```',
+    'No further follow-ups needed.',
+    'Sure, these should help',
+    'Dưới đây là các gợi ý',
+    'NEXT: Add the missing test for an empty config',
+  ].join('\n')
+  expect(parsePrompts(raw).map((i: any) => i.tag + ': ' + i.text)).toEqual([
+    'VERIFY: Run the tests for the parser change',
+    'NEXT: Add the missing test for an empty config',
+  ])
+  // Prompts in the user's voice that merely contain such words stay.
+  expect(parseLine('NEXT: Ask whether I will need a migration for the new column')?.text).toBe('Ask whether I will need a migration for the new column')
+  expect(parseLine('Here is the place to add the check: C:/app/a.ts, add it')).toBeNull()
+  expect(parseLine('VERIFY: Here is a wrapper that needs a test, run C:/app/test/a.test.ts')?.tag).toBe('VERIFY')
+})
+
+test('tag characters refuse the text; blank Hangul fillers and long combining runs are removed', () => {
+  expect(cleanText('Run the tests\u{E0020}\u{E0069}\u{E0067}', 50)).toBe('')
+  expect(parseLine('VERIFY: Run the tests\u{E0041}')).toBeNull()
+  expect(cleanText('\u3164\u3164\uFFA0', 10)).toBe('')
+  expect(cleanText('Run\u115F the \u1160tests', 50)).toBe('Run the tests')
+  expect(cleanText('e' + '\u0301'.repeat(12), 50)).toBe('e\u0301\u0301\u0301')
+  const nfd = 'Kiểm tra lại tệp cấu hình'.normalize('NFD')
+  expect(cleanText(nfd, 50)).toBe(nfd)
+})
+
+test('a fork answer wrapped in a preamble, a fence and bold tags still gives clean rows', async ($, on) => {
+  const seen = fresh()
+  stubs(on, 'Here are the follow-ups:\n```\n**VERIFY:** Chạy lại toàn bộ test của thay đổi này\nNEXT: Tôi sẽ xem diff của file cấu hình\n```', null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).toContain('[kiểm chứng] ★ Chạy lại toàn bộ test')
+  expect(b).not.toContain('Here are')
+  expect(b).not.toContain('Tôi sẽ')
+  expect(b).not.toContain('**')
+  expect(b).not.toContain('Chèn tất cả')
 })
 
 test('fix 1: a band restored from the store is cleaned too', async ($, on) => {

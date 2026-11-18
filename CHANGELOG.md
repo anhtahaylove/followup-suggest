@@ -2,7 +2,7 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
-## 2.0.7 (unreleased)
+## 2.0.7 (2026-11-18)
 
 - The band steps aside while a survey holds it (`e.props.hasSurvey`). Claude Code's surveys answer bare digits, which
   the band's digit hotkeys would otherwise compete for; the band comes back once the survey is gone.

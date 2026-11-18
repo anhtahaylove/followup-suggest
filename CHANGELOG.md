@@ -2,6 +2,15 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.8 (2026-11-18)
+
+- No model call for the menu when you typed a prompt while the turn was running and that prompt waits to start the
+  next turn. Claude Code starts the waiting prompt only after the mod's model call has returned (the fork took a median
+  of about 2 s), and that turn clears the menu at once, so the call only held your prompt back. The prompt is seen at
+  Enter: `prompt.submit` with the running turn's `turnId`. A prompt the running turn takes in between tool calls (a
+  `queued_command` attachment) does not count, nor do slash commands and notifications. Unattended debug runs print
+  `[debug] skipped=queued`; statistics are not touched by a skipped turn.
+
 ## 2.0.7 (2026-11-18)
 
 - The band steps aside while a survey holds it (`e.props.hasSurvey`). Claude Code's surveys answer bare digits, which

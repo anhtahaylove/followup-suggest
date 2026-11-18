@@ -675,6 +675,8 @@ let attendedCache = null
 // and can take seconds; if the epoch changed meanwhile, its result belongs to a conversation state that is gone.
 let epoch = 0
 let autoTurn = false // the next turn was started by a notification or another non-typed prompt, not by the user
+// Prompts the user typed while a turn was running that have not entered it: each will start a turn of its own.
+let typedAhead = 0
 
 // Helpers take `$` as an argument; the mods validator only allows that for top-level function declarations.
 async function redraw($) {
@@ -1147,6 +1149,7 @@ export function register(on, options) {
       return next(e)
     }
     autoTurn = false
+    if (!e.command && e.turnId) typedAhead += 1 // typed while a turn runs (raised at Enter in the terminal)
     if (!e.command) epoch += 1 // a slash command (/fu stats, /model ...) is not 'moving on': a pending menu stays valid
     // While the mod is off it keeps nothing of what you type.
     try { if (!e.command && enabled) rememberUserText(e.text) } catch (err) { /* ignore */ }
@@ -1162,8 +1165,14 @@ export function register(on, options) {
     try { await persist($) } catch (err) { /* ignore */ }
     return next(e)
   })
+  // A prompt typed mid-turn that the running turn took in (between two tool calls) starts no turn of its own.
+  on("prompt.attachment", { type: "queued_command" }, async ($, e, next) => {
+    typedAhead = Math.max(0, typedAhead - 1)
+    return next(e)
+  })
   on("turn.start", async ($, e, next) => {
     if (!e.agentId) turnChecks = []
+    if (!e.agentId) typedAhead = 0 // the waiting prompt has started its turn (or several entered as one)
     const auto = autoTurn
     autoTurn = false
     if (auto) return next(e)
@@ -1294,6 +1303,9 @@ export function register(on, options) {
     try { surfaces = await $.session.surfaces() } catch (err) { surfaces = [] }
     if (!surfaces.length && debug !== "1") return next(e)
     if (await backgroundAgentsBusy($)) return next(e)
+    // A prompt typed during this turn waits to start the next one: Claude Code holds it until the model call below returns,
+    // and its turn clears the menu at once. Skip the call; that turn gets its own menu.
+    if (typedAhead > 0) return debug === "1" ? { text: "[debug] skipped=queued (a prompt typed during the turn is waiting)" } : next(e)
 
     // 1) the session model through a cached fork (sees the whole task); 2) Haiku over the final answer if that fails.
     const tuning = computeTuning(await loadStats($), await loadRows($), currentLang())

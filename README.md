@@ -1,6 +1,6 @@
 # followup-suggest
 
-Version 2.0.7.
+Version 2.0.8.
 
 A [Claude Code](https://code.claude.com) mod that suggests what to ask next. After a substantial answer it shows 0 to 5
 follow-up prompts in a band right above the input box. Click a row to add that prompt to your draft, review it, press
@@ -27,6 +27,9 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 - Silence is a normal result: explanations, factual answers and closed decisions get no menu.
 - No model call is made after a turn that was interrupted, refused or ended by an API error, or while a background
   subagent the main conversation started is still working: its report starts a new turn, and that turn gets the menu.
+- No model call is made either when you typed a prompt while the turn was running and it waits to start the next turn:
+  that turn would clear the menu at once, and Claude Code holds the waiting prompt until the mod's model call returns
+  (about two seconds). The next turn gets its menu. A prompt the running turn takes in between tool calls does not count.
 - While a survey holds the band (it answers bare digits), the band steps aside and comes back once the survey is gone.
 - A menu that arrives after you already sent the next prompt, switched the mod off or ran `/fu forget` is discarded.
 - The band fits its pane: in a narrow pane a row is cut with `…` to the band's width, counted in terminal cells (wide
@@ -69,7 +72,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 
 ## Install
 
-Requires Claude Code with the mods API. Version 2.0.7 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
+Requires Claude Code with the mods API. Version 2.0.8 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
 `model.fork` API the mod prints one notice and stays off for the session.
 
 From the marketplace in this repository (this one command adds the marketplace and installs the plugin):
@@ -170,7 +173,8 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
   cleaning, length and danger checks), `tune` (after hidden tags), `paths` (after the missing-path check) and `final`
   (after the already-checked, repeat, forbidden-action, off-topic and command checks and the row limit). `skills` is the number of
   commands described to the model. Turns that end before the model call (short answer, mod off, an error or refused
-  turn, a background subagent still working) print no line.
+  turn, a background subagent still working) print no line; a turn skipped because a typed prompt is waiting prints
+  `[debug] skipped=queued`.
 - The reply to `/fu` starts with `followup-suggest+ponytail:` (or another name after the `+`): Claude Code labels the
   reply with every mod it ran together with this one. The text after the colon is this mod's own; nothing is wrong.
 

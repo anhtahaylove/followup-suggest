@@ -10,6 +10,7 @@ type Seen = {
   fallbackSystem?: string; commands?: Array<{ name: string; description: string; source: string }>
   agents?: Array<Record<string, unknown>>
   debug?: string
+  fillRefused?: boolean
 }
 
 // Stubs answer in Claude Code's place, in the shape the test kit asks for per event.
@@ -81,6 +82,7 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
   on('prompt.change', (_api: unknown, e: { text: string }) => ({ text: e.text }))
   on('tool.call', () => ({ result: {}, text: 'ok' }))
   on('prompt.fill', (_api: unknown, e: { text: string; mode?: string }) => {
+    if (seen.fillRefused) return { isFilled: false, refusal: 'dialog' }
     seen.draft = e.mode === 'append' ? seen.draft + e.text : e.text
     seen.fills.push(e.text)
     return { isFilled: true }
@@ -412,6 +414,21 @@ test('one menu and one insert-all each update the shared statistics in a single 
   expect((seen.store.stats as any).used).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
   expect((seen.store.stats as any).pos).toEqual({ 0: 1, 1: 1, 2: 1, 3: 1 })
   expect((seen.store.stats as any).slash.used).toBe(1)
+})
+
+test('a row the input box refused (a dialog holds the keys) gets no check mark and counts as not used', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  seen.fillRefused = true
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(await band($)).not.toContain('✓')
+  expect((seen.store.stats as any).used).toBeUndefined()
+  seen.fillRefused = false
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(await band($)).toContain('✓')
+  expect((seen.store.stats as any).used).toEqual({ VERIFY: 1 })
 })
 
 test('a row cleared from the box and then not sent is marked inserted, not sent', async ($, on) => {

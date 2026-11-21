@@ -923,13 +923,15 @@ function tuningHint(t) {
 
 // Append `parts` to whatever is already in the input box (one per line) instead of replacing it.
 // `prompt.read()` resolves { text, cursor }; `prompt.fill` with mode "append" keeps the draft and adds after it.
+// False when the box refused the text (a dialog holds the keys): the row then gets no check mark and is not counted.
 async function addToDraft($, parts) {
   let hasDraft = false
   try {
     const box = await $.prompt.read()
     hasDraft = Boolean(box && String(box.text || "").trim())
   } catch (err) { /* treat an unreadable draft as empty */ }
-  await $.prompt.fill({ text: (hasDraft ? "\n" : "") + parts.join("\n"), mode: "append" })
+  const r = await $.prompt.fill({ text: (hasDraft ? "\n" : "") + parts.join("\n"), mode: "append" })
+  return !(r && r.isFilled === false)
 }
 
 // Add suggestions by index. One suggestion goes in as plain text; several go in as a numbered list so Claude
@@ -940,7 +942,7 @@ async function addIndexes($, indexes) {
   const fresh = indexes.filter((i) => last[i] !== undefined && (!used.has(i) || !inDraft(draft, last[i])))
   if (!fresh.length) return false
   const parts = fresh.length === 1 ? [last[fresh[0]].text] : fresh.map((i, n) => (n + 1) + ". " + last[i].text)
-  await addToDraft($, parts)
+  if (!await addToDraft($, parts)) return false
   const counts = []
   for (const i of fresh) {
     used.add(i)

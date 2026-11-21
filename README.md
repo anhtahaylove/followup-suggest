@@ -99,14 +99,18 @@ by design. `/fu stats` shows how many suggestions were shown and used.
 |---|---|
 | `/fu` | Add row 1 to the input box (when a menu is shown) |
 | `/fu 2`, `/fu 1 3`, `/fu all` | Add rows to the input box. A row the mod already added (✓) whose text is still in the box is skipped; text you typed yourself is not recognised. When every chosen row is skipped, nothing happens. Ranges are not supported (`/fu 1-3` adds row 1) |
+| `/fu no 2`, `/fu no 1 3` | Remove rows from the band and keep them out of later menus: the model is told about the last 10 dismissed rows, and a row that comes back with the same opening words is dropped. `/fu no clear` forgets them. Applies to all sessions |
+| `/fu now` | Ask for a fresh menu for the last finished answer: the way to get suggestions in manual mode, or to ask again. A prompt sent meanwhile discards it |
 | `/fu hide`, `/fu show` | Fold the band into one line, or open it again |
 | `/fu log` | Show or hide the last 3 menus and what happened to each row: ➤ sent, ✎ inserted but changed or not sent, unused (30 are kept) |
 | `/fu off`, `/fu on` | Switch the mod off or on for this session. Off also removes the menu on screen and discards one still being written; `on` does not bring it back. While off, no model call is made and your prompts are not recorded |
+| `/fu manual`, `/fu auto` | Manual mode makes no model call after an answer; `/fu now` asks when you want a menu. `auto` (the default) brings back a menu after each answer. Applies to all sessions |
+| `/fu style <text>`, `/fu style off` | A standing preference sent with every menu request, for example `/fu style prefer checks that only read files` (at most 300 characters; the rules above still win). `/fu style` alone shows it. Applies to all sessions |
 | `/fu lang en\|vi\|auto` | Pin the UI language, or follow your latest prompt (default). Applies to all sessions |
 | `/fu rows 1-5\|auto` | Set the most rows a menu may have, or let the mod decide. Applies to all sessions |
 | `/fu stats`, `/fu tune` | Usage numbers and what the menus cost (the line ends with On. or Off.), and the automatic adjustments they caused |
-| `/fu reset` | Clear the usage statistics, which also clears the automatic adjustments. Row limit and language are kept |
-| `/fu forget` | Delete every stored menu, history and recent prompt, for all sessions. Statistics and settings are kept |
+| `/fu reset` | Clear the usage statistics, which also clears the automatic adjustments. Row limit, language, manual mode and style are kept |
+| `/fu forget` | Delete every stored menu, history, recent prompt and dismissed row, for all sessions. Statistics and settings are kept |
 
 Clicking a row, the insert-all line or the folded line does the same as the matching command. Any other argument shows
 the usage line while a menu is shown; without a menu `/fu` only says that there are no suggestions yet (or that the mod
@@ -117,7 +121,8 @@ of them. Claude Code consumes that digit, so a prompt that starts with a digit l
 on screen; `/fu off` avoids it.
 
 Vietnamese aliases: `tắt` (off), `bật` (on), `ẩn` (hide), `hiện` (show), `lịch sử` (log), `thống kê` (stats),
-`điều chỉnh` (tune), `dòng N|tự-động` (rows), `ngôn-ngữ` (lang), `quên` (forget), `tất cả` (all). A ✓ on a row means its
+`điều chỉnh` (tune), `dòng N|tự-động` (rows), `ngôn-ngữ` (lang), `quên` (forget), `tất cả` (all), `bỏ` (no),
+`ngay` (now), `thủ-công` (manual), `tự-động` (auto), `kiểu` (style). A ✓ on a row means its
 text is in the input box now: it goes away as soon as you clear the box or edit that text out, and after a resume or
 reload the marks are checked against the box again. Usage is counted only once per row per menu, even if you clear,
 reinsert or restore it. Saved menus from older versions use their saved check marks to seed this count.
@@ -147,10 +152,12 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
   guard, the mod stays silent while that incomplete context remains in recent history, including after resume.
   The entire retained latest request anchors both the fork and fallback; constraint detection is heuristic, not a
   general natural-language permission system. Sessions are kept for 30 days, at most 100 of them. Usage statistics,
-  the row limit and language choice have no time limit. `/fu forget` deletes the per-session data and invalidates
-  pending menu work in the current session; it does not stop another already-running session from recording new data.
+  the row limit, language, manual mode, style and the last 10 dismissed rows have no time limit. `/fu forget` deletes
+  the per-session data and the dismissed rows, and invalidates pending menu work in the current session; it does not
+  stop another already-running session from recording new data.
 - Each answer of 60 characters or more costs one extra model call (a cached fork of your session), or two when the fork
-  fails and Haiku is asked instead. The call is made before the filters, so a menu that ends up empty still costs it.
+  fails and Haiku is asked instead; in manual mode only `/fu now` makes that call. The call is made before the filters,
+  so a menu that ends up empty still costs it. The style text and the dismissed rows are sent with every call.
   `/fu stats` shows the cost as the model reports it: how many menus came from the fork and from Haiku, the fork's
   average time and output tokens, and the share of its input read from the prompt cache.
 - Unattended runs (`claude -p`, scripts) make no model call and write nothing. With `FOLLOWUP_SUGGEST_DEBUG=1` they do

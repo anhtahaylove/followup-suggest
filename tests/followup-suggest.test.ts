@@ -379,6 +379,23 @@ test('sending clears the box before prompt.submit runs: the inserted row still c
   expect(b).toContain('· 1. [kiểm chứng] Chạy lại toàn bộ test')
 })
 
+test('sending a skill row keeps its menu in the history, with the row marked sent', async ($, on) => {
+  const seen = fresh()
+  seen.commands = [{ name: 'git-pushing', description: 'Push the current branch', source: 'plugin' }]
+  stubs(on, 'NEXT: /git-pushing đẩy nhánh hiện tại lên origin\n' + THREE.split('\n')[0], null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '1' })
+  // A skill runs as a model turn, so the engine raises prompt.submit carrying `command` (PromptSubmitInput.command).
+  await $.prompt.submit({ text: '/git-pushing đẩy nhánh hiện tại lên origin', command: { name: 'git-pushing', args: 'đẩy nhánh hiện tại lên origin' }, origin: { kind: 'composer' } })
+  let b = await band($)
+  expect(b).not.toContain('Gợi ý tiếp theo')
+  expect(b).toContain('gửi 1/2')
+  await $.command.run({ command: 'fu', args: 'log' })
+  b = await band($)
+  expect(b).toContain('➤ 1. [bước tiếp] /git-pushing')
+})
+
 test('a row cleared from the box and then not sent is marked inserted, not sent', async ($, on) => {
   const seen = fresh()
   stubs(on, THREE, null, seen)

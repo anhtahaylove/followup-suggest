@@ -1161,7 +1161,8 @@ export function register(on, options) {
         await $.store.set("lastLang", seenLang)
       }
     } catch (err) { /* ignore */ }
-    try { await clear($, !e.command, e.text) } catch (err) { /* ignore */ }
+    // A skill or prompt command clears the menu too (it starts a model turn): archive it, so a sent /skill row counts as sent.
+    try { await clear($, true, e.text) } catch (err) { /* ignore */ }
     try { await persist($) } catch (err) { /* ignore */ }
     return next(e)
   })

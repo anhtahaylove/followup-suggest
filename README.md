@@ -37,7 +37,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
   and when the band is given too few rows the Hide line, then the insert-all line, are dropped first. If you collapsed
   the band (Ctrl+X, then Ctrl+A), a new menu shows a short toast instead of arriving unnoticed.
 - Each row has a tag: **verify** (check or read back what was just produced), **next** (the smallest reversible next
-  step), **handoff** (prepare a reviewable result) or **needs input** (the task waits on your decision: the row is your
+  step), **handoff** (prepare a reviewable result) or **answer** (the task waits on your decision: the row is your
   answer, for example one of the options Claude offered). Every row is written as a message you would send, never as a
   question back to you; a fact only you know gets no row.
 - Model output is treated as untrusted. Before a row is shown:
@@ -134,7 +134,7 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
 - if at least 15 picks were made and at least 85% of them were rows 1-2, menus are capped at 3 rows. Setting
   `/fu rows N` replaces this cap and takes effect even before 20 suggestions have been shown.
 
-**verify** and **needs input** are never hidden. `/fu tune` explains what is active.
+**verify** and **answer** are never hidden. `/fu tune` explains what is active.
 
 ## Privacy and cost
 

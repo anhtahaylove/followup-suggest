@@ -40,7 +40,7 @@ const TAGS = { VERIFY: true, NEXT: true, HANDOFF: true, INPUT: true }
 const plural = (n, one, many) => n + " " + (n === 1 ? one : many)
 export const STRINGS = {
   en: {
-    tags: { VERIFY: "verify", NEXT: "next", HANDOFF: "handoff", INPUT: "needs input" },
+    tags: { VERIFY: "verify", NEXT: "next", HANDOFF: "handoff", INPUT: "answer" },
     header: "↳ Suggested next — click a row to add it to the input box (several = do them together)",
     headerRestored: (age) => "↳ Suggestions from last time, " + age + " — click a row to add it to the input box",
     headerAllDone: (n) => (n === 1 ? "↳ The suggestion is" : "↳ All " + n + " suggestions are") + " in the input box · /fu off to switch off",
@@ -90,7 +90,7 @@ export const STRINGS = {
     refused: "the input box did not take the suggestion (close the open dialog first)",
   },
   vi: {
-    tags: { VERIFY: "kiểm chứng", NEXT: "bước tiếp", HANDOFF: "bàn giao", INPUT: "cần thông tin" },
+    tags: { VERIFY: "kiểm chứng", NEXT: "bước tiếp", HANDOFF: "bàn giao", INPUT: "trả lời" },
     header: "↳ Gợi ý tiếp theo — bấm dòng để thêm vào ô nhập (nhiều dòng = làm cùng lúc)",
     headerRestored: (age) => "↳ Gợi ý từ lần trước, " + age + " — bấm dòng để thêm vào ô nhập",
     headerAllDone: (n) => "↳ Đã thêm hết " + n + " gợi ý vào ô nhập · /fu off tắt hẳn",

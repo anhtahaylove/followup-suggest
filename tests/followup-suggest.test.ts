@@ -113,6 +113,25 @@ test('the session fork supplies the menu: tags, star on the first row, no transc
   expect(seen.haikuCalls).toBe(0)
 })
 
+test('a row that answers a question from Claude carries the Vietnamese answer chip', async ($, on) => {
+  const input = 'INPUT: Dùng phương án 2, giữ cổng 8080\nNEXT: Xem diff của file cấu hình'
+  stubs(on, input, null, fresh())
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const vi = await band($)
+  expect(vi).toContain('[trả lời] ★ Dùng phương án 2, giữ cổng 8080')
+  expect(vi).not.toContain('cần thông tin')
+})
+
+test('the English answer chip replaces needs input', async ($, on) => {
+  stubs(on, 'INPUT: Use option 2 and keep port 8080\nNEXT: Show the diff of the config file', null, blank())
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const en = await band($)
+  expect(en).toContain('[answer] ★ Use option 2 and keep port 8080')
+  expect(en).not.toContain('needs input')
+})
+
 test('band rows carry digit hotkeys 1..N and insert-all carries 0; the row text holds no number of its own', async ($, on) => {
   const seen = fresh()
   stubs(on, THREE, null, seen)

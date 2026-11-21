@@ -74,7 +74,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 
 ## Install
 
-Requires Claude Code with the mods API. Version 2.0.9 is tested on Claude Code 2.1.326 (also pinned in CI) and 2.1.330. On an older version without the
+Requires Claude Code with the mods API. CI tests every change on Claude Code 2.1.326 and 2.1.330. On an older version without the
 `model.fork` API the mod prints one notice and stays off for the session.
 
 From the marketplace in this repository (this one command adds the marketplace and installs the plugin):

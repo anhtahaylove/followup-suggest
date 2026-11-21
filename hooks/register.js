@@ -68,8 +68,10 @@ export const STRINGS = {
     usage: (n, hidden) => "use /fu 1, /fu 2 3, /fu all, /fu hide, /fu show, /fu off or /fu stats (" + plural(n, "suggestion", "suggestions") + " now" + (hidden ? ", hidden" : "") + ").",
     langSet: { en: "UI language: English.", vi: "UI language: Vietnamese (tiếng Việt).", auto: "UI language: automatic (follows your latest prompt)." },
     langHelp: (now) => "use /fu lang en, /fu lang vi or /fu lang auto. Now: " + now + ".",
-    stats: (shown, taken, pct, silent, byTag, slash, on) => "shown " + shown + " suggestions, you used " + taken + " (" + pct + "%), silent in " + silent + " turns. By type (used/shown): " + byTag + ". "
-      + "/skill rows: described to the model in " + slash.offered + " turns, shown " + slash.shown + ", used " + slash.used + ". " + (on ? "On." : "Off."),
+    stats: (shown, taken, pct, silent, byTag, slash, model, on) => "shown " + shown + " suggestions, you used " + taken + " (" + pct + "%), silent in " + silent + " turns. By type (used/shown): " + byTag + ". "
+      + "/skill rows: described to the model in " + slash.offered + " turns, shown " + slash.shown + ", used " + slash.used + ". " + model + (on ? "On." : "Off."),
+    modelFork: (n, sec, out, cachePct) => "Model calls: " + plural(n, "menu", "menus") + " from the session model (on average " + sec + " s, " + out + " output tokens, " + cachePct + "% of the input read from cache)",
+    modelHaiku: (n) => plural(n, "menu", "menus") + " from Haiku",
     tune: (notes) => "self-tuning — " + notes + ". (/fu reset clears the statistics, /fu stats shows the numbers)",
     tuneNotReady: (total, min) => "not enough data to self-tune yet (" + total + "/" + min + " suggestions shown)",
     tuneHideTag: (tag, used, shown) => "stopped offering [" + tag + "] (used " + used + "/" + shown + ")",
@@ -113,8 +115,10 @@ export const STRINGS = {
     usage: (n, hidden) => "dùng /fu 1, /fu 2 3, /fu all, /fu hide, /fu show, /fu off hoặc /fu stats (hiện có " + n + " gợi ý" + (hidden ? ", đang ẩn" : "") + ").",
     langSet: { en: "ngôn ngữ giao diện: tiếng Anh (English).", vi: "ngôn ngữ giao diện: tiếng Việt.", auto: "ngôn ngữ giao diện: tự động (theo prompt mới nhất của bạn)." },
     langHelp: (now) => "dùng /fu lang en, /fu lang vi hoặc /fu lang auto. Hiện: " + now + ".",
-    stats: (shown, taken, pct, silent, byTag, slash, on) => "đã hiện " + shown + " gợi ý, bạn dùng " + taken + " (" + pct + "%), im lặng " + silent + " lượt. Theo loại (dùng/hiện): " + byTag + ". "
-      + "Lệnh /skill: mô tả cho model " + slash.offered + " lượt, hiện " + slash.shown + " dòng, dùng " + slash.used + ". " + (on ? "Đang bật." : "Đang tắt."),
+    stats: (shown, taken, pct, silent, byTag, slash, model, on) => "đã hiện " + shown + " gợi ý, bạn dùng " + taken + " (" + pct + "%), im lặng " + silent + " lượt. Theo loại (dùng/hiện): " + byTag + ". "
+      + "Lệnh /skill: mô tả cho model " + slash.offered + " lượt, hiện " + slash.shown + " dòng, dùng " + slash.used + ". " + model + (on ? "Đang bật." : "Đang tắt."),
+    modelFork: (n, sec, out, cachePct) => "Gọi model: " + n + " menu từ model của phiên (trung bình " + sec + " giây, " + out + " token đầu ra, " + cachePct + "% đầu vào đọc từ cache)",
+    modelHaiku: (n) => n + " menu từ Haiku",
     tune: (notes) => "tự điều chỉnh — " + notes + ". (/fu reset để xóa thống kê, /fu stats để xem số liệu)",
     tuneNotReady: (total, min) => "chưa đủ dữ liệu để tự điều chỉnh (" + total + "/" + min + " gợi ý đã hiện)",
     tuneHideTag: (tag, used, shown) => "ngừng đề xuất loại [" + tag + "] (dùng " + used + "/" + shown + ")",
@@ -876,9 +880,9 @@ async function bump($, counts) {
   if (!counts.length) return
   try {
     const stats = (await $.store.get("stats")) || {}
-    for (const [group, tag] of counts) {
+    for (const [group, tag, n = 1] of counts) {
       const g = stats[group] || {}
-      g[tag] = (Number(g[tag]) || 0) + 1
+      g[tag] = (Number(g[tag]) || 0) + (Number(n) || 0)
       stats[group] = g
     }
     await $.store.set("stats", stats)
@@ -895,7 +899,14 @@ async function statsLine($) {
   const T = L()
   const byTag = Object.keys(TAGS).map((t) => T.tags[t] + " " + (Number((s.used || {})[t]) || 0) + "/" + (Number((s.shown || {})[t]) || 0)).join(", ")
   const slash = { offered: Number((s.slash || {}).offered) || 0, shown: Number((s.slash || {}).shown) || 0, used: Number((s.slash || {}).used) || 0 }
-  return T.stats(shown, taken, shown ? Math.round(100 * taken / shown) : 0, silent, byTag, slash, enabled)
+  // What the menus cost, from the usage each model call reported (counted since this was added, or since /fu reset).
+  const m = s.model || {}
+  const forks = Number(m.fork) || 0
+  const haiku = Number(m.haiku) || 0
+  const parts = []
+  if (forks) parts.push(T.modelFork(forks, ((Number(m.forkMs) || 0) / forks / 1000).toFixed(1), Math.round((Number(m.forkOut) || 0) / forks), Number(m.forkIn) ? Math.round(100 * (Number(m.forkCached) || 0) / Number(m.forkIn)) : 0))
+  if (haiku) parts.push(T.modelHaiku(haiku))
+  return T.stats(shown, taken, shown ? Math.round(100 * taken / shown) : 0, silent, byTag, slash, parts.length ? parts.join(", ") + ". " : "", enabled)
 }
 
 async function loadStats($) {
@@ -1002,7 +1013,8 @@ function historyNodes($, Text, Button, lineWhenClosed, cols) {
 }
 
 // Ask the session's own model through a cached fork, so it sees the whole task and not only the final answer.
-// A fork that cannot answer (timeout, refusal) returns null and Haiku is tried. A fork call that throws means the API
+// An answer comes back as the fork's result ({ text, usage }); a fork that cannot answer (timeout, refusal) returns null
+// and Haiku is tried. A fork call that throws means the API
 // itself is missing (an older Claude Code): FORK_UNAVAILABLE, and the mod stops for the session instead of paying for
 // a Haiku call on every turn.
 const FORK_UNAVAILABLE = Symbol("fork unavailable")
@@ -1017,7 +1029,7 @@ async function askFork($, hint) {
   try {
     const slow = new Promise((resolve) => setTimeout(() => resolve(null), FORK_TIMEOUT_MS))
     const r = await Promise.race([call, slow])
-    return r && r.isAnswered ? r.text : null
+    return r && r.isAnswered ? r : null
   } catch (err) {
     return /unknown method|no implementation|not a function|not supported/i.test(String((err && err.message) || err)) ? FORK_UNAVAILABLE : null
   }
@@ -1334,7 +1346,18 @@ export function register(on, options) {
 
     let source = "fork"
     if (epoch !== mine || forkUnavailable) return next(e)
+    let started = Date.now()
     let text = await askFork($, hint)
+    // What the call cost, counted with the menu's statistics in one write below.
+    let cost = []
+    if (text && typeof text === "object") {
+      const u = text.usage || {}
+      const tokens = (k) => Number(u[k]) || 0
+      cost = [["model", "fork"], ["model", "forkMs", Date.now() - started], ["model", "forkOut", tokens("output_tokens")],
+        ["model", "forkIn", tokens("input_tokens") + tokens("cache_creation_input_tokens") + tokens("cache_read_input_tokens")],
+        ["model", "forkCached", tokens("cache_read_input_tokens")]]
+      text = text.text
+    }
     if (epoch !== mine) return next(e) // do not start a fallback or emit notices for forgotten work
     if (text === FORK_UNAVAILABLE) {
       forkUnavailable = true
@@ -1343,6 +1366,7 @@ export function register(on, options) {
     if (text === null) {
       source = "haiku"
       let r
+      started = Date.now()
       try {
         r = await $.model.complete({
           model: "haiku",
@@ -1360,6 +1384,7 @@ export function register(on, options) {
         return { text: L().modelSilent(String((r && r.reason) || L().unknownReason).slice(0, 120)) }
       }
       text = r.text
+      cost = [["model", "haiku"], ["model", "haikuMs", Date.now() - started]]
     }
 
     // The user sent another prompt (or switched the mod off) while the menu was being written: it is stale, show nothing.
@@ -1388,14 +1413,14 @@ export function register(on, options) {
     const counts = last.length ? last.map((item) => ["shown", item.tag]) : [["silent", "n"]]
     for (const item of last) if (item.text.startsWith("/")) counts.push(["slash", "shown"])
     if (skills) counts.push(["slash", "offered"]) // turns in which at least one skill was described to the model
-    await bump($, counts)
+    await bump($, [...counts, ...cost])
     if (epoch !== mine) return next(e)
     await persist($)
     await redraw($)
     // A collapsed band hides the menu: say it is there. The state is the one the last render reported.
     if (last.length && bandCollapsed) { try { await $.ui.toast(L().toastCollapsed(last.length)) } catch (err) { /* only a courtesy */ } }
     // Debug aid: with FOLLOWUP_SUGGEST_DEBUG=1 the raw menu is also printed under the answer (useful in claude -p).
-    if (debug === "1") return { text: "[debug] via " + source + " raw=" + JSON.stringify(String(text).slice(0, 700)) + " parsed=" + parsed.length + " tune=" + afterTune + " paths=" + afterPaths + " skills=" + (skills ? skills.split("\n").length : 0) + " final=" + last.length }
+    if (debug === "1") return { text: "[debug] via " + source + " raw=" + JSON.stringify(String(text).slice(0, 700)) + " parsed=" + parsed.length + " tune=" + afterTune + " paths=" + afterPaths + " skills=" + (skills ? skills.split("\n").length : 0) + " final=" + last.length + " ms=" + (Date.now() - started) + " cost=" + JSON.stringify(cost.slice(2).map((c) => c[2])) }
     return next(e)
   })
 }

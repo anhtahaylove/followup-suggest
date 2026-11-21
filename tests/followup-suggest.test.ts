@@ -65,7 +65,7 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
     seen.forkCalls += 1
     return forkText === null
       ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
-      : { value: { isAnswered: true, text: forkText } }
+      : { value: { isAnswered: true, text: forkText, usage: { input_tokens: 10, output_tokens: 120, cache_read_input_tokens: 9800, cache_creation_input_tokens: 190 } } }
   })
   on('model.complete', async (_api: unknown, e: { system: string }) => {
     seen.fallbackSystem = e.system
@@ -408,12 +408,44 @@ test('one menu and one insert-all each update the shared statistics in a single 
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   expect(writes).toBe(1)
-  expect(seen.store.stats).toEqual({ shown: { NEXT: 2, VERIFY: 1, HANDOFF: 1 }, slash: { shown: 1, offered: 1 } })
+  expect((seen.store.stats as any).shown).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
+  expect((seen.store.stats as any).slash).toEqual({ shown: 1, offered: 1 })
+  expect((seen.store.stats as any).model.fork).toBe(1)
   await $.command.run({ command: 'fu', args: 'all' })
   expect(writes).toBe(2)
   expect((seen.store.stats as any).used).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
   expect((seen.store.stats as any).pos).toEqual({ 0: 1, 1: 1, 2: 1, 3: 1 })
   expect((seen.store.stats as any).slash.used).toBe(1)
+})
+
+test('/fu stats reports what the menus cost: model calls, output tokens, cache share and Haiku fallbacks', async ($, on) => {
+  const seen = blank()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.turn.complete({ answer: ANSWER + ' Thêm một câu.', durationMs: 1000 })
+  const model = (seen.store.stats as any).model
+  expect(model.fork).toBe(2)
+  expect(model.forkOut).toBe(240)
+  expect(model.forkIn).toBe(20000)
+  expect(model.forkCached).toBe(19600)
+  expect(Number.isFinite(model.forkMs)).toBe(true)
+  const r: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(r.text).toContain('2 menus from the session model')
+  expect(r.text).toContain('120 output tokens')
+  expect(r.text).toContain('98% of the input read from cache')
+  expect(r.text).not.toContain('Haiku')
+})
+
+test('a Haiku fallback is counted in /fu stats', async ($, on) => {
+  const seen = fresh()
+  stubs(on, null, THREE, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect((seen.store.stats as any).model.haiku).toBe(1)
+  expect((seen.store.stats as any).model.fork).toBeUndefined()
+  const r: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(r.text).toContain('1 menu từ Haiku')
 })
 
 test('a row the input box refused (a dialog holds the keys) gets no check mark and counts as not used', async ($, on) => {

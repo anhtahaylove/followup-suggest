@@ -113,6 +113,25 @@ test('the session fork supplies the menu: tags, star on the first row, no transc
   expect(seen.haikuCalls).toBe(0)
 })
 
+test('a row that answers a question from Claude carries the Vietnamese answer chip', async ($, on) => {
+  const input = 'INPUT: Dùng phương án 2, giữ cổng 8080\nNEXT: Xem diff của file cấu hình'
+  stubs(on, input, null, fresh())
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const vi = await band($)
+  expect(vi).toContain('[trả lời] ★ Dùng phương án 2, giữ cổng 8080')
+  expect(vi).not.toContain('cần thông tin')
+})
+
+test('the English answer chip replaces needs input', async ($, on) => {
+  stubs(on, 'INPUT: Use option 2 and keep port 8080\nNEXT: Show the diff of the config file', null, blank())
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const en = await band($)
+  expect(en).toContain('[answer] ★ Use option 2 and keep port 8080')
+  expect(en).not.toContain('needs input')
+})
+
 test('band rows carry digit hotkeys 1..N and insert-all carries 0; the row text holds no number of its own', async ($, on) => {
   const seen = fresh()
   stubs(on, THREE, null, seen)
@@ -2244,4 +2263,214 @@ test('/fu forget prevents a store write after the fork has started updating stat
   expect(await band($)).not.toContain('[verify]')
   expect(seen.store['band:test-session']).toBeUndefined()
   expect(seen.store.bands).toBeUndefined()
+})
+
+test('/fu style steers every later menu until it is switched off', async ($, on) => {
+  const seen = blank()
+  stubs(on, THREE, null, seen)
+  await start($)
+  const set: any = await $.command.run({ command: 'fu', args: 'style Prefer checks that only read files, never run tests' })
+  expect(set.text).toContain('Prefer checks that only read files, never run tests')
+  expect(seen.store.style).toBe('Prefer checks that only read files, never run tests')
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkPrompt).toContain('Prefer checks that only read files, never run tests')
+  const shown: any = await $.command.run({ command: 'fu', args: 'style' })
+  expect(shown.text).toContain('Prefer checks that only read files, never run tests')
+  await $.command.run({ command: 'fu', args: 'style off' })
+  expect(seen.store.style).toBeUndefined()
+  await $.prompt.submit({ text: 'tiếp tục sửa hàm parse cho đúng' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkPrompt).not.toContain('Prefer checks that only read files')
+})
+
+test('/fu no N removes the row, keeps the other marks, and keeps it out of later menus', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '3' }) // the handoff row goes into the box
+  const r: any = await $.command.run({ command: 'fu', args: 'no 2' })
+  expect(r.text).toContain('Xem diff của file cấu hình')
+  const after = await band($)
+  expect(after).not.toContain('Xem diff của file cấu hình')
+  expect(after).toContain('Chạy lại toàn bộ test của thay đổi này')
+  expect(after).toContain('✓ ') // the handoff row, now row 2, keeps its check mark
+  expect(seen.store.avoid).toEqual(['Xem diff của file cấu hình'])
+  // The next menu: the model is told, and the same row is dropped even if it comes back.
+  await $.prompt.submit({ text: 'tiếp tục sửa hàm parse cho đúng' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkPrompt).toContain('Xem diff của file cấu hình')
+  const next = await band($)
+  expect(next).toContain('Chạy lại toàn bộ test của thay đổi này')
+  expect(next).not.toContain('Xem diff của file cấu hình')
+  const cleared: any = await $.command.run({ command: 'fu', args: 'no clear' })
+  expect(cleared.text).toBeTruthy()
+  expect(seen.store.avoid).toBeUndefined()
+})
+
+test('/fu no with every row dismissed empties the band; a bad index only explains', async ($, on) => {
+  const seen = fresh()
+  stubs(on, 'VERIFY: Chạy lại toàn bộ test của thay đổi này', null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const bad: any = await $.command.run({ command: 'fu', args: 'no 4' })
+  expect(bad.text).toContain('/fu no')
+  expect(await band($)).toContain('Chạy lại toàn bộ test')
+  await $.command.run({ command: 'fu', args: 'no 1' })
+  expect(await band($)).not.toContain('Chạy lại toàn bộ test')
+})
+
+test('/fu manual skips the model after each answer; /fu now asks for the last one; /fu auto restores', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  const m: any = await $.command.run({ command: 'fu', args: 'manual' })
+  expect(m.text).toContain('/fu now')
+  expect(seen.store.manual).toBe(true)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(0)
+  expect(await band($)).not.toContain('[kiểm chứng]')
+  const now: any = await $.command.run({ command: 'fu', args: 'now' })
+  expect(now.text ?? '').toBe('')
+  expect(seen.forkCalls).toBe(1)
+  expect(await band($)).toContain('[kiểm chứng]')
+  const stats: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(stats.text).toContain('/fu now')
+  await $.command.run({ command: 'fu', args: 'auto' })
+  expect(seen.store.manual).toBeUndefined()
+  await $.prompt.submit({ text: 'tiếp tục sửa hàm parse cho đúng' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(2)
+})
+
+test('/fu now with no finished answer only explains, and a new turn forgets the old answer', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  const none: any = await $.command.run({ command: 'fu', args: 'now' })
+  expect(none.text).toBeTruthy()
+  expect(seen.forkCalls).toBe(0)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(1)
+  await $.prompt.submit({ text: 'tiếp tục sửa hàm parse cho đúng' })
+  await $.turn.start({ turnId: 't2' })
+  const stale: any = await $.command.run({ command: 'fu', args: 'now' })
+  expect(stale.text).toBeTruthy()
+  expect(seen.forkCalls).toBe(1)
+})
+
+test('/fu now in automatic mode asks again for the last answer', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '1' })
+  await $.command.run({ command: 'fu', args: 'now' })
+  expect(seen.forkCalls).toBe(2)
+  const b = await band($)
+  expect(b).toContain('[kiểm chứng]')
+  expect(b.split('"label":"✓ ').length - 1).toBe(1) // only the row still in the box carries a mark
+  const history = (seen.store['band:test-session'] as any).history
+  expect(history.length).toBe(1) // the replaced menu went into the history
+  expect(history[0].items[0].state).toBe('inserted')
+})
+
+test('/fu forget also deletes the dismissed rows and the remembered answer', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: 'no 2' })
+  await $.command.run({ command: 'fu', args: 'forget' })
+  expect(seen.store.avoid).toBeUndefined()
+  const now: any = await $.command.run({ command: 'fu', args: 'now' })
+  expect(now.text).toBeTruthy()
+  expect(seen.forkCalls).toBe(1)
+})
+
+test('/fu now while a menu is still being written makes no second model call', async ($, on) => {
+  const seen = fresh()
+  let release: () => void = () => {}
+  seen.forkGate = new Promise<void>((resolve) => { release = resolve })
+  const forking = new Promise<void>((resolve) => { seen.forkStarted = resolve })
+  stubs(on, THREE, null, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await forking
+  const busy: any = await $.command.run({ command: 'fu', args: 'now' })
+  expect(busy.text).toBeTruthy()
+  release()
+  await pending
+  expect(seen.forkCalls).toBe(1)
+  expect((seen.store.stats as any).shown.VERIFY).toBe(1)
+})
+
+test('a prompt sent while /fu now is writing discards the menu without a false message', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  let release: () => void = () => {}
+  seen.forkGate = new Promise<void>((resolve) => { release = resolve })
+  const forking = new Promise<void>((resolve) => { seen.forkStarted = resolve })
+  const now = $.command.run({ command: 'fu', args: 'now' })
+  await forking
+  await $.prompt.submit({ text: 'tiếp tục sửa hàm parse cho đúng' })
+  release()
+  const r: any = await now
+  expect(r.text ?? '').toBe('')
+})
+
+test('a dismissed row keeps out only that row, not others that share its opening words', async ($, on) => {
+  const seen = fresh()
+  const p = 'C:/Users/me/projects/followup-suggest/src/lib/'
+  stubs(on, 'VERIFY: Đọc lại ' + p + 'parse.ts và xác nhận đúng yêu cầu\nVERIFY: Đọc lại ' + p + 'config.ts và xác nhận đúng yêu cầu', null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: 'no 1' })
+  await $.prompt.submit({ text: 'tiếp tục sửa hàm parse cho đúng' })
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const b = await band($)
+  expect(b).toContain(p + 'config.ts')
+  expect(b).not.toContain(p + 'parse.ts')
+})
+
+test('/fu now after a row went into the box marks that row instead of offering it twice', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '1' })
+  await $.command.run({ command: 'fu', args: 'now' })
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(seen.fills.length).toBe(1)
+  expect(await band($)).toContain('✓ ')
+})
+
+test('a dismissal moves the counted marks too, so a reinserted row is not counted twice', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '3' })
+  await $.command.run({ command: 'fu', args: 'no 2' })
+  seen.draft = '' // the user clears the box
+  await $.prompt.change({ text: '' })
+  await $.command.run({ command: 'fu', args: '2' })
+  expect((seen.store.stats as any).used.HANDOFF).toBe(1)
+  expect(seen.fills.length).toBe(2)
+})
+
+test('stored settings of the wrong type are ignored', async ($, on) => {
+  const seen = fresh()
+  seen.store.style = { text: 'not a string' }
+  seen.store.avoid = 'not a list'
+  seen.store.manual = 'yes'
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(seen.forkCalls).toBe(1)
+  expect(seen.forkPrompt).not.toContain('[object Object]')
+  expect(seen.forkPrompt).not.toContain('standing preference')
+  expect(await band($)).toContain('[kiểm chứng]')
 })

@@ -99,8 +99,8 @@ by design. `/fu stats` shows how many suggestions were shown and used.
 |---|---|
 | `/fu` | Add row 1 to the input box (when a menu is shown) |
 | `/fu 2`, `/fu 1 3`, `/fu all` | Add rows to the input box. A row the mod already added (✓) whose text is still in the box is skipped; text you typed yourself is not recognised. When every chosen row is skipped, nothing happens. Ranges are not supported (`/fu 1-3` adds row 1) |
-| `/fu no 2`, `/fu no 1 3` | Remove rows from the band and keep them out of later menus: the model is told about the last 10 dismissed rows, and a row that comes back with the same opening words is dropped. `/fu no clear` forgets them. Applies to all sessions |
-| `/fu now` | Ask for a fresh menu for the last finished answer: the way to get suggestions in manual mode, or to ask again. A prompt sent meanwhile discards it |
+| `/fu no 2`, `/fu no 1 3` | Remove rows from the band and keep them out of later menus: the model is told about the last 10 dismissed rows, and a row that comes back word for word is dropped. `/fu no clear` forgets them. Applies to all sessions |
+| `/fu now` | Ask for a fresh menu for the last finished answer: the way to get suggestions in manual mode, or to ask again. A prompt sent meanwhile discards it; while a menu is still being written it only says so. A row already in the input box keeps its ✓ in the new menu |
 | `/fu hide`, `/fu show` | Fold the band into one line, or open it again |
 | `/fu log` | Show or hide the last 3 menus and what happened to each row: ➤ sent, ✎ inserted but changed or not sent, unused (30 are kept) |
 | `/fu off`, `/fu on` | Switch the mod off or on for this session. Off also removes the menu on screen and discards one still being written; `on` does not bring it back. While off, no model call is made and your prompts are not recorded |
@@ -109,7 +109,7 @@ by design. `/fu stats` shows how many suggestions were shown and used.
 | `/fu lang en\|vi\|auto` | Pin the UI language, or follow your latest prompt (default). Applies to all sessions |
 | `/fu rows 1-5\|auto` | Set the most rows a menu may have, or let the mod decide. Applies to all sessions |
 | `/fu stats`, `/fu tune` | Usage numbers and what the menus cost (the line ends with On. or Off.), and the automatic adjustments they caused |
-| `/fu reset` | Clear the usage statistics, which also clears the automatic adjustments. Row limit, language, manual mode and style are kept |
+| `/fu reset` | Clear the usage statistics, which also clears the automatic adjustments. Row limit, language, manual mode, style and dismissed rows are kept |
 | `/fu forget` | Delete every stored menu, history, recent prompt and dismissed row, for all sessions. Statistics and settings are kept |
 
 Clicking a row, the insert-all line or the folded line does the same as the matching command. Any other argument shows

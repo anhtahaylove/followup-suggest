@@ -102,6 +102,7 @@ export const STRINGS = {
     manualNote: "Manual mode (/fu now). ",
     nowNothing: "no finished answer to suggest for yet (/fu now works after an answer).",
     nowSilent: "no suggestions for the last answer (the model chose silence).",
+    nowBusy: "a menu for this answer is already being written; it appears in a moment.",
   },
   vi: {
     tags: { VERIFY: "kiểm chứng", NEXT: "bước tiếp", HANDOFF: "bàn giao", INPUT: "trả lời" },
@@ -164,6 +165,7 @@ export const STRINGS = {
     manualNote: "Chế độ thủ công (/fu now). ",
     nowNothing: "chưa có câu trả lời nào để gợi ý (/fu now dùng được sau một câu trả lời).",
     nowSilent: "không có gợi ý nào cho câu trả lời vừa rồi (model chọn im lặng).",
+    nowBusy: "đang viết gợi ý cho câu trả lời này; gợi ý sẽ hiện trong giây lát.",
   },
 }
 
@@ -972,7 +974,10 @@ async function loadRows($) {
 // Settings kept across sessions: `/fu style` (store key `style`), rows dismissed with `/fu no` (`avoid`) and `/fu manual`
 // (`manual`). The store is a file on disk, so what is read back is cleaned like any other text before it reaches a prompt.
 async function loadStyle($) {
-  try { return cleanText(await $.store.get("style"), MAX_STYLE_CHARS) } catch (err) { return "" }
+  try {
+    const style = await $.store.get("style")
+    return typeof style === "string" ? cleanText(style, MAX_STYLE_CHARS) : ""
+  } catch (err) { return "" }
 }
 async function loadAvoid($) {
   try {
@@ -991,10 +996,11 @@ function steeringHint(style, avoid) {
   return hint
 }
 
-// A dismissed row that comes back word for word (its opening words) is dropped even when the model ignores the hint.
+// A dismissed row that comes back word for word is dropped even when the model ignores the hint. The whole text is
+// compared: rows that share a long path prefix are different rows.
 export function dropAvoided(items, avoid) {
-  const keys = new Set(avoid.map((t) => normText(t).slice(0, 40)))
-  return items.filter((item) => !keys.has(normText(item.text).slice(0, 40)))
+  const keys = new Set(avoid.map(normText))
+  return items.filter((item) => !keys.has(normText(item.text)))
 }
 
 async function tuneLine($) {
@@ -1123,6 +1129,15 @@ async function askFork($, hint) {
   }
 }
 
+// The menu being written, if any, so /fu now does not start a second model call beside it.
+let making = null
+function track(work) {
+  making = work
+  const done = () => { if (making === work) making = null }
+  work.then(done, done)
+  return work
+}
+
 // One menu for `answer`: ask the model, filter its lines, then show and store the result. Used after a finished turn
 // and by /fu now. Null when there is nothing to show or say; { text } for a notice or the debug line.
 async function makeMenu($, answer, mine, debug) {
@@ -1203,10 +1218,13 @@ async function makeMenu($, answer, mine, debug) {
     items = dropOffTopic(items, latest)
     items = dropUnknownCommands(items, known)
     items = dropAvoided(items, avoid)
+    // A row already in the box (added from the menu this one replaces, before /fu now) shows as added, not as new.
+    const draft = await draftText($)
+    if (epoch !== mine) return null
     // A notification turn kept the previous menu on screen: it goes into the history before the new one replaces it.
     archiveCurrent()
     last = items.slice(0, tuning.maxItems)
-    used = new Set()
+    used = new Set(last.flatMap((item, i) => (inDraft(draft, item) ? [i] : [])))
     counted = new Set()
     collapsed = false
     menuAt = Date.now()
@@ -1233,6 +1251,7 @@ async function makeMenu($, answer, mine, debug) {
 
 export function register(on, options) {
   on("session.start", async ($, e, next) => {
+    lastAnswer = "" // a new or cleared conversation has no answer to suggest for yet
     try {
       await $.command.register({ name: "fu", description: "Follow-up prompts: add to input box (1-5, 1 3, all), or no N | now | hide | show | log | off | on | manual | auto | style | stats | tune | reset | rows | lang | forget", argumentHint: "[1-5 | 1 3 | all | no N|clear | now | hide | show | log | off | on | manual | auto | style text|off | stats | tune | reset | rows N|auto | lang en|vi|auto | forget]" })
     } catch (err) {
@@ -1403,10 +1422,14 @@ export function register(on, options) {
       if (!enabled) return { text: L().isOff }
       if (forkUnavailable) return { text: L().needsNewer }
       if (!lastAnswer) return { text: L().nowNothing }
+      if (making) return { text: L().nowBusy }
+      if (recentUser.some((t) => t.includes(INCOMPLETE_CONTEXT))) return {} // silent by design while that context is kept
       let debug
       try { debug = await $.env.get("FOLLOWUP_SUGGEST_DEBUG") } catch (err) { debug = undefined }
-      const r = await makeMenu($, lastAnswer, epoch, debug)
-      return r || (last.length ? {} : { text: L().nowSilent })
+      const mine = epoch
+      const r = await track(makeMenu($, lastAnswer, mine, debug))
+      if (r) return r
+      return epoch !== mine || last.length ? {} : { text: L().nowSilent }
     }
     if (!last.length) return { text: enabled ? L().noSuggestions : L().isOff }
     const picked = pickIndexes(e.args, last.length)
@@ -1592,6 +1615,6 @@ export function register(on, options) {
     // and its turn clears the menu at once. Skip the call; that turn gets its own menu.
     if (typedAhead > 0) return debug === "1" ? { text: "[debug] skipped=queued (a prompt typed during the turn is waiting)" } : next(e)
 
-    return (await makeMenu($, answer, mine, debug)) || next(e)
+    return (await track(makeMenu($, answer, mine, debug))) || next(e)
   })
 }

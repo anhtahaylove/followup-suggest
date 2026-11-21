@@ -2,6 +2,25 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.1.0 (2026-11-21)
+
+- `/fu no 2` (or `/fu no 1 3`) removes rows you do not want from the band and keeps them out of later menus: the model
+  is told about the last 10 dismissed rows, and one that comes back with the same opening words is dropped anyway.
+  `/fu no clear` forgets them, and `/fu forget` deletes them with the stored menus. The rows left on the band keep their
+  check marks.
+- `/fu style <text>` adds a standing preference to every menu request, for example
+  `/fu style prefer checks that only read files`. The rules still win over it. `/fu style` shows it, `/fu style off`
+  removes it.
+- `/fu manual` stops the model call after each answer; `/fu now` asks for a menu for the last finished answer when you
+  want one, and also works in automatic mode to ask again. `/fu auto` switches back. `/fu stats` says when manual mode
+  is on.
+- The chip of a row that answers Claude's question reads **answer** (Vietnamese **trả lời**) instead of **needs input**
+  (**cần thông tin**). Since 2.0.9 such a row is your reply, for example choosing one of the options Claude offered, so
+  the old label read as if the row still asked you for something.
+- CI runs on Claude Code 2.1.326 and 2.1.330.
+- Not done, measured on the stored history: skipping rows you already sent. Of 58 rows that repeated a row sent earlier
+  in the same session, 39 were sent again.
+
 ## 2.0.9 (2026-11-21)
 
 - Every row is written in your voice. The rules described a needs-input row as "ask plainly for the exact missing

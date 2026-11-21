@@ -2,6 +2,31 @@
 
 All notable changes to this project. Versions before 2.0 were private builds.
 
+## 2.0.9 (2026-11-21)
+
+- Every row is written in your voice. The rules described a needs-input row as "ask plainly for the exact missing
+  information", so the model often wrote a question back to you ("Which data source…?", "Tell me when…") or a template
+  with blanks, which you cannot send as it stands; in the stored history such rows were used about half as often as
+  other needs-input rows. A needs-input row is now your answer (for example choosing one of the options Claude offered),
+  a step only you can take becomes the message you send after taking it, and a fact only you know gets no row. In 18
+  real runs (three prompts that end with Claude asking a question, three times each, old rules against new) 6 of 19
+  rows under the old rules were unsendable questions, instructions or templates, and none of 21 under the new rules.
+- Sending a skill or prompt command (for example a `/skill …` row you picked) no longer throws the menu away unrecorded.
+  Claude Code raises `prompt.submit` with `command` for such a submission; the mod cleared the menu there without moving
+  it into the history, so `/fu log` lost that menu and a sent `/skill` row was never recorded as sent.
+- `/fu stats` shows what the model calls cost: forks of your session with their average time, output tokens and the
+  share of the input read from the prompt cache (from the usage each call reports), and Haiku fallbacks. A call whose
+  menu was dropped because you moved on still counts; a fork past the 60-second limit reports nothing and does not.
+  Counted from this version on (or since `/fu reset`). Unattended debug runs also print `call_ms` and `usage`.
+- A row the input box refuses (`prompt.fill` answers `isFilled: false`, as while a dialog holds the keys) gets no check
+  mark, is not counted as used, and a toast says so. Before, the row was checked and counted although nothing reached
+  the box. When the editor did not answer (`unanswered`), the box is read back to tell whether the text landed. Idea
+  from the next-steps plugin in anthropics/claude-plugins-community.
+- All statistics of one event go to the store in one write instead of one write per counter (up to eleven per menu),
+  and within a session the writes and `/fu reset` take turns. The store file is shared by every open session, so fewer
+  round trips mean fewer counts lost when two sessions write at the same time.
+- Headers and tag chips use `weight` instead of the deprecated `bold` prop; the terminal draws them as before.
+
 ## 2.0.8 (2026-11-18)
 
 - No model call for the menu when you typed a prompt while the turn was running and that prompt waits to start the

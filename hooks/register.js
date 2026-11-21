@@ -1,9 +1,9 @@
-// followup-suggest v1.6: leaves Claude Code's own dim prompt suggestion alone.
+// followup-suggest: leaves Claude Code's own dim prompt suggestion alone.
 // After each finished main-conversation turn it asks the session's own model (a cached fork, so it knows the whole task)
 // for 0 to 5 follow-up prompts and shows them as a highlighted band right above the input box. Silence is a normal
 // outcome: self-contained answers produce nothing. Clicking a row ADDS that prompt to the input box (click several to
-// do them together); "Chèn tất cả" adds all of them as a numbered list. The band stays until you submit, dismiss it,
-// or a new turn starts. `/fu 2`, `/fu 1 3`, `/fu all`, `/fu off|on|hide|stats` do the same from the keyboard.
+// do them together); "Insert all" adds all of them as a numbered list. The band stays until you submit, dismiss it,
+// or a new turn starts. Digits 1-5 and 0 in an empty prompt, `/fu 2`, `/fu 1 3` and `/fu all` do the same from the keyboard.
 // Nothing is ever sent for you.
 //
 // RULES sets the menu policy: silence when self-contained, a session-scope gate,

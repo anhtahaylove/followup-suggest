@@ -854,6 +854,9 @@ test('the band never offers an action the user just forbade', async ($, on) => {
   expect(b).not.toContain('Chạy file')
   expect(b).toContain('Đọc lại file')
   expect(seen.forkPrompt).toContain('NEVER suggest an action they forbade')
+  // Rows are the user's own messages: a needs-input row answers Claude's question instead of asking the user one.
+  expect(seen.forkPrompt).toContain("in the user's voice: never your question, request or instruction to the user")
+  expect(seen.forkPrompt).not.toContain('ask plainly for the exact missing information')
 })
 
 test('the fork is anchored on the latest user request and told to ignore leftovers', async ($, on) => {

@@ -1,9 +1,9 @@
-// followup-suggest v1.6: leaves Claude Code's own dim prompt suggestion alone.
+// followup-suggest: leaves Claude Code's own dim prompt suggestion alone.
 // After each finished main-conversation turn it asks the session's own model (a cached fork, so it knows the whole task)
 // for 0 to 5 follow-up prompts and shows them as a highlighted band right above the input box. Silence is a normal
 // outcome: self-contained answers produce nothing. Clicking a row ADDS that prompt to the input box (click several to
-// do them together); "Chèn tất cả" adds all of them as a numbered list. The band stays until you submit, dismiss it,
-// or a new turn starts. `/fu 2`, `/fu 1 3`, `/fu all`, `/fu off|on|hide|stats` do the same from the keyboard.
+// do them together); "Insert all" adds all of them as a numbered list. The band stays until you submit, dismiss it,
+// or a new turn starts. Digits 1-5 and 0 in an empty prompt, `/fu 2`, `/fu 1 3` and `/fu all` do the same from the keyboard.
 // Nothing is ever sent for you.
 //
 // RULES sets the menu policy: silence when self-contained, a session-scope gate,
@@ -12,7 +12,9 @@ const RULES = [
   "You are NOT continuing the task. Reply ONLY with follow-up prompt lines for the user's menu, or exactly: NONE",
   "Output 0 to 5 lines, best first, each as  TAG: prompt",
   "TAG is one of: VERIFY (check, test or read back what was just produced), NEXT (the smallest reversible next implementation step),",
-  "HANDOFF (prepare a reviewable or handoff-ready result), INPUT (the task is blocked: ask plainly for the exact missing information).",
+  "HANDOFF (prepare a reviewable or handoff-ready result), INPUT (the task waits on the user's decision: the user's answer, e.g. choosing one of the options you offered and restating it).",
+  "Every line is a message the user sends to you, in the user's voice: never your question, request or instruction to the user (tell me, send me, type X then tell me).",
+  "When only the user can do the next step (log in, reconnect, approve), write what they send after doing it (for example: Reconnected the server, rerun the check). When the answer is a fact only the user knows, output no line for it.",
   "Answer NONE when the reply is self-contained: a factual answer, a finished explanation, a closed decision, or nothing safe remains.",
   "Silence is correct. Never pad. One precise prompt beats three speculative ones. Offer several only when each is genuinely distinct and useful.",
   "The user's own instructions beat any default next step: NEVER suggest an action they forbade, limited or postponed in this conversation (for example if they said do not run it, never suggest running it; verify by reading instead).",
@@ -68,8 +70,12 @@ export const STRINGS = {
     usage: (n, hidden) => "use /fu 1, /fu 2 3, /fu all, /fu hide, /fu show, /fu off or /fu stats (" + plural(n, "suggestion", "suggestions") + " now" + (hidden ? ", hidden" : "") + ").",
     langSet: { en: "UI language: English.", vi: "UI language: Vietnamese (tiếng Việt).", auto: "UI language: automatic (follows your latest prompt)." },
     langHelp: (now) => "use /fu lang en, /fu lang vi or /fu lang auto. Now: " + now + ".",
-    stats: (shown, taken, pct, silent, byTag, slash, on) => "shown " + shown + " suggestions, you used " + taken + " (" + pct + "%), silent in " + silent + " turns. By type (used/shown): " + byTag + ". "
-      + "/skill rows: described to the model in " + slash.offered + " turns, shown " + slash.shown + ", used " + slash.used + ". " + (on ? "On." : "Off."),
+    stats: (shown, taken, pct, silent, byTag, slash, model, on) => "shown " + shown + " suggestions, you used " + taken + " (" + pct + "%), silent in " + silent + " turns. By type (used/shown): " + byTag + ". "
+      + "/skill rows: described to the model in " + slash.offered + " turns, shown " + slash.shown + ", used " + slash.used + ". " + model + (on ? "On." : "Off."),
+    modelCalls: (parts) => "Model calls: " + parts + ". ",
+    modelFork: (n, sec, out, cachePct) => plural(n, "fork", "forks") + " of your session (on average " + sec.toFixed(1) + " s"
+      + (out === null ? "" : ", " + out + " output tokens, " + cachePct + "% of the input read from cache") + ")",
+    modelHaiku: (n) => plural(n, "Haiku fallback", "Haiku fallbacks"),
     tune: (notes) => "self-tuning — " + notes + ". (/fu reset clears the statistics, /fu stats shows the numbers)",
     tuneNotReady: (total, min) => "not enough data to self-tune yet (" + total + "/" + min + " suggestions shown)",
     tuneHideTag: (tag, used, shown) => "stopped offering [" + tag + "] (used " + used + "/" + shown + ")",
@@ -81,6 +87,7 @@ export const STRINGS = {
     unknownReason: "unknown reason",
     forgot: (n) => "deleted the stored menus, history and recent prompts of " + plural(n, "session", "sessions") + " (statistics and settings kept).",
     needsNewer: "suggestions need a newer Claude Code (the model.fork mods API is missing); off for this session.",
+    refused: "the input box did not take the suggestion (close the open dialog first)",
   },
   vi: {
     tags: { VERIFY: "kiểm chứng", NEXT: "bước tiếp", HANDOFF: "bàn giao", INPUT: "cần thông tin" },
@@ -113,8 +120,12 @@ export const STRINGS = {
     usage: (n, hidden) => "dùng /fu 1, /fu 2 3, /fu all, /fu hide, /fu show, /fu off hoặc /fu stats (hiện có " + n + " gợi ý" + (hidden ? ", đang ẩn" : "") + ").",
     langSet: { en: "ngôn ngữ giao diện: tiếng Anh (English).", vi: "ngôn ngữ giao diện: tiếng Việt.", auto: "ngôn ngữ giao diện: tự động (theo prompt mới nhất của bạn)." },
     langHelp: (now) => "dùng /fu lang en, /fu lang vi hoặc /fu lang auto. Hiện: " + now + ".",
-    stats: (shown, taken, pct, silent, byTag, slash, on) => "đã hiện " + shown + " gợi ý, bạn dùng " + taken + " (" + pct + "%), im lặng " + silent + " lượt. Theo loại (dùng/hiện): " + byTag + ". "
-      + "Lệnh /skill: mô tả cho model " + slash.offered + " lượt, hiện " + slash.shown + " dòng, dùng " + slash.used + ". " + (on ? "Đang bật." : "Đang tắt."),
+    stats: (shown, taken, pct, silent, byTag, slash, model, on) => "đã hiện " + shown + " gợi ý, bạn dùng " + taken + " (" + pct + "%), im lặng " + silent + " lượt. Theo loại (dùng/hiện): " + byTag + ". "
+      + "Lệnh /skill: mô tả cho model " + slash.offered + " lượt, hiện " + slash.shown + " dòng, dùng " + slash.used + ". " + model + (on ? "Đang bật." : "Đang tắt."),
+    modelCalls: (parts) => "Gọi model: " + parts + ". ",
+    modelFork: (n, sec, out, cachePct) => n + " lần fork phiên (trung bình " + sec.toFixed(1).replace(".", ",") + " giây"
+      + (out === null ? "" : ", " + out + " token đầu ra, " + cachePct + "% đầu vào đọc từ cache") + ")",
+    modelHaiku: (n) => n + " lần dự phòng bằng Haiku",
     tune: (notes) => "tự điều chỉnh — " + notes + ". (/fu reset để xóa thống kê, /fu stats để xem số liệu)",
     tuneNotReady: (total, min) => "chưa đủ dữ liệu để tự điều chỉnh (" + total + "/" + min + " gợi ý đã hiện)",
     tuneHideTag: (tag, used, shown) => "ngừng đề xuất loại [" + tag + "] (dùng " + used + "/" + shown + ")",
@@ -126,6 +137,7 @@ export const STRINGS = {
     unknownReason: "không rõ lý do",
     forgot: (n) => "đã xóa menu, lịch sử và prompt gần đây đã lưu của " + n + " phiên (giữ thống kê và cài đặt).",
     needsNewer: "gợi ý cần Claude Code mới hơn (thiếu API model.fork của mods); tắt trong phiên này.",
+    refused: "ô nhập chưa nhận gợi ý (hãy đóng hộp thoại đang mở trước)",
   },
 }
 
@@ -870,14 +882,33 @@ async function setCollapsed($, value) {
 
 // Local usage counters (kept in the plugin's own store): how many suggestions were shown and how many were taken,
 // per tag, plus how often the model chose silence. This is how to tell, with numbers, whether the menu helps.
-async function bump($, group, tag) {
-  try {
-    const stats = (await $.store.get("stats")) || {}
-    const g = stats[group] || {}
-    g[tag] = (Number(g[tag]) || 0) + 1
-    stats[group] = g
-    await $.store.set("stats", stats)
-  } catch (err) { /* statistics must never get in the way */ }
+// All counts of one event go in one read and one write: the store file is shared by every open session, and each
+// extra round trip widens the window in which two sessions overwrite each other's counts. Within this session the
+// writes (and /fu reset) take turns, so a click during a menu's write cannot drop either count.
+let statsWrites = Promise.resolve()
+function bump($, counts) {
+  if (!counts.length) return statsWrites
+  statsWrites = statsWrites.then(async () => {
+    try {
+      const stats = (await $.store.get("stats")) || {}
+      for (const [group, tag, n = 1] of counts) {
+        const g = stats[group] || {}
+        g[tag] = (Number(g[tag]) || 0) + (Number(n) || 0)
+        stats[group] = g
+      }
+      await $.store.set("stats", stats)
+    } catch (err) { /* statistics must never get in the way */ }
+  })
+  return statsWrites
+}
+
+// Counts for one fork's reported usage. Tokens are counted, and averaged, only over the calls that reported them.
+function usageCounts(kind, u) {
+  if (!u || typeof u !== "object") return []
+  const n = (k) => Number(u[k]) || 0
+  return [["calls", kind + "Usage"], ["calls", kind + "Out", n("output_tokens")],
+    ["calls", kind + "In", n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens")],
+    ["calls", kind + "Cached", n("cache_read_input_tokens")]]
 }
 
 async function statsLine($) {
@@ -890,7 +921,15 @@ async function statsLine($) {
   const T = L()
   const byTag = Object.keys(TAGS).map((t) => T.tags[t] + " " + (Number((s.used || {})[t]) || 0) + "/" + (Number((s.shown || {})[t]) || 0)).join(", ")
   const slash = { offered: Number((s.slash || {}).offered) || 0, shown: Number((s.slash || {}).shown) || 0, used: Number((s.slash || {}).used) || 0 }
-  return T.stats(shown, taken, shown ? Math.round(100 * taken / shown) : 0, silent, byTag, slash, enabled)
+  // What the model calls cost, from the usage each reported (counted since this was added, or since /fu reset).
+  const m = s.calls || {}
+  const forks = Number(m.fork) || 0
+  const reported = Number(m.forkUsage) || 0
+  const haiku = Number(m.haiku) || 0
+  const parts = []
+  if (forks) parts.push(T.modelFork(forks, (Number(m.forkMs) || 0) / forks / 1000, reported ? Math.round((Number(m.forkOut) || 0) / reported) : null, Number(m.forkIn) ? Math.round(100 * (Number(m.forkCached) || 0) / Number(m.forkIn)) : 0))
+  if (haiku) parts.push(T.modelHaiku(haiku))
+  return T.stats(shown, taken, shown ? Math.round(100 * taken / shown) : 0, silent, byTag, slash, parts.length ? T.modelCalls(parts.join(", ")) : "", enabled)
 }
 
 async function loadStats($) {
@@ -918,13 +957,19 @@ function tuningHint(t) {
 
 // Append `parts` to whatever is already in the input box (one per line) instead of replacing it.
 // `prompt.read()` resolves { text, cursor }; `prompt.fill` with mode "append" keeps the draft and adds after it.
+// False when the box refused the text (a dialog holds the keys): the row then gets no check mark and is not counted.
+// An app that did not answer may still have taken it (`unanswered`), so the box is read back to tell.
 async function addToDraft($, parts) {
   let hasDraft = false
   try {
     const box = await $.prompt.read()
     hasDraft = Boolean(box && String(box.text || "").trim())
   } catch (err) { /* treat an unreadable draft as empty */ }
-  await $.prompt.fill({ text: (hasDraft ? "\n" : "") + parts.join("\n"), mode: "append" })
+  const r = await $.prompt.fill({ text: (hasDraft ? "\n" : "") + parts.join("\n"), mode: "append" })
+  if (!r || r.isFilled !== false) return true
+  if (r.refusal !== "unanswered") return false
+  const draft = await draftText($)
+  return parts.every((p) => draft.includes(normText(p).slice(0, 40)))
 }
 
 // Add suggestions by index. One suggestion goes in as plain text; several go in as a numbered list so Claude
@@ -935,15 +980,19 @@ async function addIndexes($, indexes) {
   const fresh = indexes.filter((i) => last[i] !== undefined && (!used.has(i) || !inDraft(draft, last[i])))
   if (!fresh.length) return false
   const parts = fresh.length === 1 ? [last[fresh[0]].text] : fresh.map((i, n) => (n + 1) + ". " + last[i].text)
-  await addToDraft($, parts)
+  if (!await addToDraft($, parts)) {
+    try { await $.ui.toast(L().refused) } catch (err) { /* only a courtesy */ }
+    return null
+  }
+  const counts = []
   for (const i of fresh) {
     used.add(i)
     if (counted.has(i)) continue // already counted when it was first taken
     counted.add(i)
-    await bump($, "used", last[i].tag)
-    if (last[i].text.startsWith("/")) await bump($, "slash", "used")
-    await bump($, "pos", String(i))
+    counts.push(["used", last[i].tag], ["pos", String(i)])
+    if (last[i].text.startsWith("/")) counts.push(["slash", "used"])
   }
+  await bump($, counts)
   await persist($)
   await redraw($)
   return true
@@ -968,7 +1017,7 @@ function historyNodes($, Text, Button, lineWhenClosed, cols) {
     })]
   }
   const T = L()
-  const nodes = [Text({ color: "gray", bold: true, children: [fit(T.historyHeader, cols)] })]
+  const nodes = [Text({ color: "gray", weight: "semibold", children: [fit(T.historyHeader, cols)] })]
   for (const h of history.slice(-3).reverse()) {
     const sent = h.items.filter((it) => it.state === "sent").length
     nodes.push(Text({ dimColor: true, children: [fit(T.historyEntry(new Date(h.at).toTimeString().slice(0, 5), sent, h.items.length), cols)] }))
@@ -994,7 +1043,9 @@ function historyNodes($, Text, Button, lineWhenClosed, cols) {
 }
 
 // Ask the session's own model through a cached fork, so it sees the whole task and not only the final answer.
-// A fork that cannot answer (timeout, refusal) returns null and Haiku is tried. A fork call that throws means the API
+// The fork's result comes back as it is ({ isAnswered, text, usage }, usage also on an error or empty reply); a fork
+// that does not settle within the time limit returns null. Either way without an answer, Haiku is tried. A fork call
+// that throws means the API
 // itself is missing (an older Claude Code): FORK_UNAVAILABLE, and the mod stops for the session instead of paying for
 // a Haiku call on every turn.
 const FORK_UNAVAILABLE = Symbol("fork unavailable")
@@ -1009,7 +1060,7 @@ async function askFork($, hint) {
   try {
     const slow = new Promise((resolve) => setTimeout(() => resolve(null), FORK_TIMEOUT_MS))
     const r = await Promise.race([call, slow])
-    return r && r.isAnswered ? r.text : null
+    return r || null
   } catch (err) {
     return /unknown method|no implementation|not a function|not supported/i.test(String((err && err.message) || err)) ? FORK_UNAVAILABLE : null
   }
@@ -1112,7 +1163,9 @@ export function register(on, options) {
       return { text: L().rowsSet(n) }
     }
     if (word === "reset") {
-      try { await $.store.delete("stats") } catch (err) { /* nothing stored */ }
+      // Queued behind statistics writes already under way, so none of them brings the old numbers back.
+      statsWrites = statsWrites.then(async () => { try { await $.store.delete("stats") } catch (err) { /* nothing stored */ } })
+      await statsWrites
       return { text: L().reset }
     }
     if (/^(lang|ngôn-ngữ)(\s|$)/.test(word)) {
@@ -1132,8 +1185,9 @@ export function register(on, options) {
     if (!last.length) return { text: enabled ? L().noSuggestions : L().isOff }
     const picked = pickIndexes(e.args, last.length)
     if (!picked.length) return { text: L().usage(last.length, collapsed) }
+    const folded = collapsed
     collapsed = false // picking from the keyboard opens a folded band so the check marks are visible
-    await addIndexes($, picked)
+    if (await addIndexes($, picked) === null) collapsed = folded // nothing went in: leave the band as it was
     // Empty result: print nothing, so Claude doesn't read the command's output.
     return {}
   })
@@ -1161,7 +1215,8 @@ export function register(on, options) {
         await $.store.set("lastLang", seenLang)
       }
     } catch (err) { /* ignore */ }
-    try { await clear($, !e.command, e.text) } catch (err) { /* ignore */ }
+    // A skill or prompt command clears the menu too (it starts a model turn): archive it, so a sent /skill row counts as sent.
+    try { await clear($, true, e.text) } catch (err) { /* ignore */ }
     try { await persist($) } catch (err) { /* ignore */ }
     return next(e)
   })
@@ -1239,7 +1294,7 @@ export function register(on, options) {
         onPress: async () => { await addIndexes($, [i]) },
         children: [
           head,
-          Text({ color: TAG_COLORS[item.tag], bold: !used.has(i), dimColor: used.has(i), children: [chip] }),
+          Text({ color: TAG_COLORS[item.tag], weight: used.has(i) ? "regular" : "semibold", dimColor: used.has(i), children: [chip] }),
           marks + fit(item.text, cols - 3 - displayWidth(head + chip + marks)),
         ],
       })
@@ -1270,10 +1325,10 @@ export function register(on, options) {
       onPress: async () => { await setCollapsed($, true) },
     })
     const title = allDone
-      ? Text({ color: "green", bold: true, children: [fit(T.headerAllDone(last.length), cols - 4)] })
+      ? Text({ color: "green", weight: "semibold", children: [fit(T.headerAllDone(last.length), cols - 4)] })
       : restored && Date.now() - menuAt >= FRESH_MS
-        ? Text({ color: "cyan", bold: true, children: [fit(T.headerRestored(T.ago(Math.floor((Date.now() - menuAt) / 60000))), cols - 4)] })
-        : Text({ color: "cyan", bold: true, children: [fit(T.header, cols - 4)] })
+        ? Text({ color: "cyan", weight: "semibold", children: [fit(T.headerRestored(T.ago(Math.floor((Date.now() - menuAt) / 60000))), cols - 4)] })
+        : Text({ color: "cyan", weight: "semibold", children: [fit(T.header, cols - 4)] })
     // With `maxRows` too small for everything, drop the least important lines first (Hide, insert-all, title), then the last rows.
     let lines = [title, ...rows, ...all, hide]
     const cap = Number.isFinite(props.maxRows) && props.maxRows > 0 ? props.maxRows : Infinity
@@ -1325,71 +1380,87 @@ export function register(on, options) {
 
     let source = "fork"
     if (epoch !== mine || forkUnavailable) return next(e)
-    let text = await askFork($, hint)
-    if (epoch !== mine) return next(e) // do not start a fallback or emit notices for forgotten work
-    if (text === FORK_UNAVAILABLE) {
-      forkUnavailable = true
-      return { text: L().needsNewer }
-    }
-    if (text === null) {
-      source = "haiku"
-      let r
-      try {
-        r = await $.model.complete({
-          model: "haiku",
-          system: RULES + hint,
-          prompt: answer.slice(-MAX_INPUT_CHARS),
-          maxTokens: 500,
-          timeoutMs: 20000,
-        })
-      } catch (err) {
+    let started = Date.now()
+    const forked = await askFork($, hint)
+    let callMs = Date.now() - started
+    let usage = forked && typeof forked === "object" ? forked.usage : undefined
+    // What a call that ran cost, from the usage it reports. It goes into the menu's single statistics write below, or,
+    // when the menu is dropped on the way (stale, failed), into a write of its own in the finally block.
+    // shortcut: a fork past FORK_TIMEOUT_MS still runs and is billed, but reports nothing here, so it is not counted.
+    let cost = forked && typeof forked === "object" && forked.reason !== "nothing-to-fork" ? [["calls", "fork"], ["calls", "forkMs", callMs], ...usageCounts("fork", usage)] : []
+    try {
+      let text = forked === FORK_UNAVAILABLE ? forked : forked && forked.isAnswered ? forked.text : null
+      if (epoch !== mine) return next(e) // do not start a fallback or emit notices for forgotten work
+      if (text === FORK_UNAVAILABLE) {
+        forkUnavailable = true
+        return { text: L().needsNewer }
+      }
+      if (text === null) {
+        source = "haiku"
+        let r
+        started = Date.now()
+        try {
+          r = await $.model.complete({
+            model: "haiku",
+            system: RULES + hint,
+            prompt: answer.slice(-MAX_INPUT_CHARS),
+            maxTokens: 500,
+            timeoutMs: 20000,
+          })
+        } catch (err) {
+          if (epoch !== mine) return next(e)
+          return { text: L().modelError(String((err && err.message) || err).slice(0, 120)) }
+        }
+        callMs = Date.now() - started
+        usage = r && r.usage
+        if (r) cost.push(["calls", "haiku"])
         if (epoch !== mine) return next(e)
-        return { text: L().modelError(String((err && err.message) || err).slice(0, 120)) }
+        if (!r || !r.isAnswered) {
+          return { text: L().modelSilent(String((r && r.reason) || L().unknownReason).slice(0, 120)) }
+        }
+        text = r.text
       }
+
+      // The user sent another prompt (or switched the mod off) while the menu was being written: it is stale, show nothing.
       if (epoch !== mine) return next(e)
-      if (!r || !r.isAnswered) {
-        return { text: L().modelSilent(String((r && r.reason) || L().unknownReason).slice(0, 120)) }
-      }
-      text = r.text
-    }
 
-    // The user sent another prompt (or switched the mod off) while the menu was being written: it is stale, show nothing.
-    if (epoch !== mine) return next(e)
-
-    // Enforce the adjustments locally too (the model may ignore a hint), then ground the verify rows in real paths.
-    const parsed = parsePrompts(text)
-    let items = parsed.filter((it) => !tuning.hideTags.includes(it.tag))
-    const afterTune = items.length
-    items = await dropMissingPaths($, items)
-    if (epoch !== mine) return next(e) // grounding is asynchronous too; forget/new prompts still invalidate it
-    const afterPaths = items.length
-    items = dropAlreadyChecked(items, turnChecks)
-    items = dropCoveredByAnswer(items, answer)
-    items = dropForbidden(items, forbiddenVerbs(recentUser.join("\n")))
-    items = dropOffTopic(items, latest)
-    items = dropUnknownCommands(items, known)
-    // A notification turn kept the previous menu on screen: it goes into the history before the new one replaces it.
-    archiveCurrent()
-    last = items.slice(0, tuning.maxItems)
-    used = new Set()
-    counted = new Set()
-    collapsed = false
-    menuAt = Date.now()
-    restored = false
-    if (last.length) {
-      for (const item of last) await bump($, "shown", item.tag)
-      for (const item of last) if (item.text.startsWith("/")) await bump($, "slash", "shown")
-    } else {
-      await bump($, "silent", "n")
+      // Enforce the adjustments locally too (the model may ignore a hint), then ground the verify rows in real paths.
+      const parsed = parsePrompts(text)
+      let items = parsed.filter((it) => !tuning.hideTags.includes(it.tag))
+      const afterTune = items.length
+      items = await dropMissingPaths($, items)
+      if (epoch !== mine) return next(e) // grounding is asynchronous too; forget/new prompts still invalidate it
+      const afterPaths = items.length
+      items = dropAlreadyChecked(items, turnChecks)
+      items = dropCoveredByAnswer(items, answer)
+      items = dropForbidden(items, forbiddenVerbs(recentUser.join("\n")))
+      items = dropOffTopic(items, latest)
+      items = dropUnknownCommands(items, known)
+      // A notification turn kept the previous menu on screen: it goes into the history before the new one replaces it.
+      archiveCurrent()
+      last = items.slice(0, tuning.maxItems)
+      used = new Set()
+      counted = new Set()
+      collapsed = false
+      menuAt = Date.now()
+      restored = false
+      const counts = last.length ? last.map((item) => ["shown", item.tag]) : [["silent", "n"]]
+      for (const item of last) if (item.text.startsWith("/")) counts.push(["slash", "shown"])
+      if (skills) counts.push(["slash", "offered"]) // turns in which at least one skill was described to the model
+      const spent = cost
+      cost = []
+      await bump($, [...counts, ...spent])
+      if (epoch !== mine) return next(e)
+      await persist($)
+      await redraw($)
+      // A collapsed band hides the menu: say it is there. The state is the one the last render reported.
+      if (last.length && bandCollapsed) { try { await $.ui.toast(L().toastCollapsed(last.length)) } catch (err) { /* only a courtesy */ } }
+      // Debug aid: with FOLLOWUP_SUGGEST_DEBUG=1 the raw menu is also printed under the answer (useful in claude -p).
+      if (debug === "1") return { text: "[debug] via " + source + " raw=" + JSON.stringify(String(text).slice(0, 700)) + " parsed=" + parsed.length + " tune=" + afterTune + " paths=" + afterPaths + " skills=" + (skills ? skills.split("\n").length : 0) + " final=" + last.length + " call_ms=" + callMs + " usage=" + JSON.stringify(usage ?? null) }
+      return next(e)
+    } finally {
+      // A call that ran but whose menu was dropped (stale, failed) still cost something: count it on its own.
+      if (cost.length) await bump($, cost)
     }
-    if (skills) await bump($, "slash", "offered") // turns in which at least one skill was described to the model
-    if (epoch !== mine) return next(e)
-    await persist($)
-    await redraw($)
-    // A collapsed band hides the menu: say it is there. The state is the one the last render reported.
-    if (last.length && bandCollapsed) { try { await $.ui.toast(L().toastCollapsed(last.length)) } catch (err) { /* only a courtesy */ } }
-    // Debug aid: with FOLLOWUP_SUGGEST_DEBUG=1 the raw menu is also printed under the answer (useful in claude -p).
-    if (debug === "1") return { text: "[debug] via " + source + " raw=" + JSON.stringify(String(text).slice(0, 700)) + " parsed=" + parsed.length + " tune=" + afterTune + " paths=" + afterPaths + " skills=" + (skills ? skills.split("\n").length : 0) + " final=" + last.length }
-    return next(e)
   })
 }

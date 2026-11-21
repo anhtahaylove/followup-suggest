@@ -10,6 +10,8 @@ type Seen = {
   fallbackSystem?: string; commands?: Array<{ name: string; description: string; source: string }>
   agents?: Array<Record<string, unknown>>
   debug?: string
+  fillRefused?: boolean
+  noUsage?: boolean
 }
 
 // Stubs answer in Claude Code's place, in the shape the test kit asks for per event.
@@ -64,7 +66,7 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
     seen.forkCalls += 1
     return forkText === null
       ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
-      : { value: { isAnswered: true, text: forkText } }
+      : { value: { isAnswered: true, text: forkText, ...(seen.noUsage ? {} : { usage: { input_tokens: 10, output_tokens: 120, cache_read_input_tokens: 9800, cache_creation_input_tokens: 190 } }) } }
   })
   on('model.complete', async (_api: unknown, e: { system: string }) => {
     seen.fallbackSystem = e.system
@@ -81,6 +83,8 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
   on('prompt.change', (_api: unknown, e: { text: string }) => ({ text: e.text }))
   on('tool.call', () => ({ result: {}, text: 'ok' }))
   on('prompt.fill', (_api: unknown, e: { text: string; mode?: string }) => {
+    // The engine strips a refusal cause a hook writes itself, so a stub can only say the text was not taken.
+    if (seen.fillRefused) return { isFilled: false }
     seen.draft = e.mode === 'append' ? seen.draft + e.text : e.text
     seen.fills.push(e.text)
     return { isFilled: true }
@@ -377,6 +381,122 @@ test('sending clears the box before prompt.submit runs: the inserted row still c
   b = await band($)
   expect(b).toContain('➤ 2. [bước tiếp] Xem diff')
   expect(b).toContain('· 1. [kiểm chứng] Chạy lại toàn bộ test')
+})
+
+test('sending a skill row keeps its menu in the history, with the row marked sent', async ($, on) => {
+  const seen = fresh()
+  seen.commands = [{ name: 'git-pushing', description: 'Push the current branch', source: 'plugin' }]
+  stubs(on, 'NEXT: /git-pushing đẩy nhánh hiện tại lên origin\n' + THREE.split('\n')[0], null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.command.run({ command: 'fu', args: '1' })
+  // A skill runs as a model turn, so the engine raises prompt.submit carrying `command` (PromptSubmitInput.command).
+  await $.prompt.submit({ text: '/git-pushing đẩy nhánh hiện tại lên origin', command: { name: 'git-pushing', args: 'đẩy nhánh hiện tại lên origin' }, origin: { kind: 'composer' } })
+  let b = await band($)
+  expect(b).not.toContain('Gợi ý tiếp theo')
+  expect(b).toContain('gửi 1/2')
+  await $.command.run({ command: 'fu', args: 'log' })
+  b = await band($)
+  expect(b).toContain('➤ 1. [bước tiếp] /git-pushing')
+})
+
+test('one menu and one insert-all each update the shared statistics in a single write', async ($, on) => {
+  const seen = fresh()
+  seen.commands = [{ name: 'git-pushing', description: 'Đẩy nhánh hiện tại lên origin', source: 'plugin' }]
+  let writes = 0
+  seen.storeSetGate = async (key) => { if (key === 'stats') writes += 1 }
+  stubs(on, 'NEXT: /git-pushing đẩy nhánh hiện tại lên origin\n' + THREE, null, seen)
+  await $.prompt.submit({ text: 'Sửa hàm parse rồi đẩy nhánh hiện tại lên origin' })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(writes).toBe(1)
+  expect((seen.store.stats as any).shown).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
+  expect((seen.store.stats as any).slash).toEqual({ shown: 1, offered: 1 })
+  expect((seen.store.stats as any).calls.fork).toBe(1)
+  await $.command.run({ command: 'fu', args: 'all' })
+  expect(writes).toBe(2)
+  expect((seen.store.stats as any).used).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
+  expect((seen.store.stats as any).pos).toEqual({ 0: 1, 1: 1, 2: 1, 3: 1 })
+  expect((seen.store.stats as any).slash.used).toBe(1)
+})
+
+test('/fu stats reports what the menus cost: model calls, output tokens, cache share and Haiku fallbacks', async ($, on) => {
+  const seen = blank()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await $.turn.complete({ answer: ANSWER + ' Thêm một câu.', durationMs: 1000 })
+  const model = (seen.store.stats as any).calls
+  expect(model.fork).toBe(2)
+  expect(model.forkOut).toBe(240)
+  expect(model.forkIn).toBe(20000)
+  expect(model.forkCached).toBe(19600)
+  expect(Number.isFinite(model.forkMs)).toBe(true)
+  const r: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(r.text).toContain('Model calls: 2 forks of your session (on average ')
+  expect(r.text).toContain('120 output tokens')
+  expect(r.text).toContain('98% of the input read from cache')
+  expect(r.text).not.toContain('Haiku')
+})
+
+test('a Haiku fallback is counted in /fu stats', async ($, on) => {
+  const seen = fresh()
+  stubs(on, null, THREE, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect((seen.store.stats as any).calls.haiku).toBe(1)
+  expect((seen.store.stats as any).calls.fork).toBeUndefined()
+  const r: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(r.text).toContain('Gọi model: 1 lần dự phòng bằng Haiku.')
+})
+
+test('a fork whose menu went stale still counts in the cost statistics, and nothing else does', async ($, on) => {
+  const seen = blank()
+  let release: () => void = () => {}
+  seen.forkGate = new Promise<void>((resolve) => { release = resolve })
+  const forking = new Promise<void>((resolve) => { seen.forkStarted = resolve })
+  stubs(on, THREE, null, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await forking
+  await $.prompt.submit({ text: 'something else entirely' }) // the user moves on while the fork is still writing
+  release()
+  await pending
+  expect(await band($)).not.toContain('[verify]')
+  const stats = seen.store.stats as any
+  expect(stats.calls.fork).toBe(1)
+  expect(stats.calls.forkOut).toBe(120)
+  expect(stats.shown).toBeUndefined()
+  expect(stats.silent).toBeUndefined()
+})
+
+test('a fork that reports no usage counts as a call but adds no tokens to the averages', async ($, on) => {
+  const seen = blank()
+  seen.noUsage = true
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const model = (seen.store.stats as any).calls
+  expect(model.fork).toBe(1)
+  expect(model.forkUsage).toBeUndefined()
+  const r: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(r.text).toContain('Model calls: 1 fork of your session (on average ')
+  expect(r.text).not.toContain('output tokens')
+})
+
+test('a row the input box refused (a dialog holds the keys) gets no check mark and counts as not used', async ($, on) => {
+  const seen = fresh()
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  seen.fillRefused = true
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(await band($)).not.toContain('✓')
+  expect((seen.store.stats as any).used).toBeUndefined()
+  seen.fillRefused = false
+  await $.command.run({ command: 'fu', args: '1' })
+  expect(await band($)).toContain('✓')
+  expect((seen.store.stats as any).used).toEqual({ VERIFY: 1 })
 })
 
 test('a row cleared from the box and then not sent is marked inserted, not sent', async ($, on) => {
@@ -770,6 +890,9 @@ test('the band never offers an action the user just forbade', async ($, on) => {
   expect(b).not.toContain('Chạy file')
   expect(b).toContain('Đọc lại file')
   expect(seen.forkPrompt).toContain('NEVER suggest an action they forbade')
+  // Rows are the user's own messages: a needs-input row answers Claude's question instead of asking the user one.
+  expect(seen.forkPrompt).toContain("in the user's voice: never your question, request or instruction to the user")
+  expect(seen.forkPrompt).not.toContain('ask plainly for the exact missing information')
 })
 
 test('the fork is anchored on the latest user request and told to ignore leftovers', async ($, on) => {

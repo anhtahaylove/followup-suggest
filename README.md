@@ -1,6 +1,6 @@
 # followup-suggest
 
-Version 2.0.8.
+Version 2.0.9.
 
 A [Claude Code](https://code.claude.com) mod that suggests what to ask next. After a substantial answer it shows 0 to 5
 follow-up prompts in a band right above the input box. Click a row to add that prompt to your draft, review it, press
@@ -37,7 +37,9 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
   and when the band is given too few rows the Hide line, then the insert-all line, are dropped first. If you collapsed
   the band (Ctrl+X, then Ctrl+A), a new menu shows a short toast instead of arriving unnoticed.
 - Each row has a tag: **verify** (check or read back what was just produced), **next** (the smallest reversible next
-  step), **handoff** (prepare a reviewable result) or **needs input** (the task is blocked on information only you have).
+  step), **handoff** (prepare a reviewable result) or **needs input** (the task waits on your decision: the row is your
+  answer, for example one of the options Claude offered). Every row is written as a message you would send, never as a
+  question back to you; a fact only you know gets no row.
 - Model output is treated as untrusted. Before a row is shown:
   - terminal escapes, control, bidi and invisible characters, blank Hangul fillers and combining marks past three in a
     row are stripped (also from menus restored from the store); text carrying Unicode tag characters is dropped;
@@ -72,7 +74,7 @@ Claude Code's own dim prompt suggestion (accepted with Tab) keeps working; this 
 
 ## Install
 
-Requires Claude Code with the mods API. Version 2.0.8 is tested on Claude Code 2.1.326 (also pinned in CI). On an older version without the
+Requires Claude Code with the mods API. Version 2.0.9 is tested on Claude Code 2.1.326 (also pinned in CI) and 2.1.330. On an older version without the
 `model.fork` API the mod prints one notice and stays off for the session.
 
 From the marketplace in this repository (this one command adds the marketplace and installs the plugin):
@@ -102,7 +104,7 @@ by design. `/fu stats` shows how many suggestions were shown and used.
 | `/fu off`, `/fu on` | Switch the mod off or on for this session. Off also removes the menu on screen and discards one still being written; `on` does not bring it back. While off, no model call is made and your prompts are not recorded |
 | `/fu lang en\|vi\|auto` | Pin the UI language, or follow your latest prompt (default). Applies to all sessions |
 | `/fu rows 1-5\|auto` | Set the most rows a menu may have, or let the mod decide. Applies to all sessions |
-| `/fu stats`, `/fu tune` | Usage numbers (the line ends with On. or Off.), and the automatic adjustments they caused |
+| `/fu stats`, `/fu tune` | Usage numbers and what the menus cost (the line ends with On. or Off.), and the automatic adjustments they caused |
 | `/fu reset` | Clear the usage statistics, which also clears the automatic adjustments. Row limit and language are kept |
 | `/fu forget` | Delete every stored menu, history and recent prompt, for all sessions. Statistics and settings are kept |
 
@@ -149,6 +151,8 @@ Statistics are kept across all sessions and do not decay. Once at least 20 sugge
   pending menu work in the current session; it does not stop another already-running session from recording new data.
 - Each answer of 60 characters or more costs one extra model call (a cached fork of your session), or two when the fork
   fails and Haiku is asked instead. The call is made before the filters, so a menu that ends up empty still costs it.
+  `/fu stats` shows the cost as the model reports it: how many menus came from the fork and from Haiku, the fork's
+  average time and output tokens, and the share of its input read from the prompt cache.
 - Unattended runs (`claude -p`, scripts) make no model call and write nothing. With `FOLLOWUP_SUGGEST_DEBUG=1` they do
   call the model and add to the usage statistics, which can affect self-tuning; run `/fu reset` after debugging.
 

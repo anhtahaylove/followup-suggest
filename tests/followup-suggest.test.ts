@@ -396,6 +396,24 @@ test('sending a skill row keeps its menu in the history, with the row marked sen
   expect(b).toContain('➤ 1. [bước tiếp] /git-pushing')
 })
 
+test('one menu and one insert-all each update the shared statistics in a single write', async ($, on) => {
+  const seen = fresh()
+  seen.commands = [{ name: 'git-pushing', description: 'Đẩy nhánh hiện tại lên origin', source: 'plugin' }]
+  let writes = 0
+  seen.storeSetGate = async (key) => { if (key === 'stats') writes += 1 }
+  stubs(on, 'NEXT: /git-pushing đẩy nhánh hiện tại lên origin\n' + THREE, null, seen)
+  await $.prompt.submit({ text: 'Sửa hàm parse rồi đẩy nhánh hiện tại lên origin' })
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  expect(writes).toBe(1)
+  expect(seen.store.stats).toEqual({ shown: { NEXT: 2, VERIFY: 1, HANDOFF: 1 }, slash: { shown: 1, offered: 1 } })
+  await $.command.run({ command: 'fu', args: 'all' })
+  expect(writes).toBe(2)
+  expect((seen.store.stats as any).used).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
+  expect((seen.store.stats as any).pos).toEqual({ 0: 1, 1: 1, 2: 1, 3: 1 })
+  expect((seen.store.stats as any).slash.used).toBe(1)
+})
+
 test('a row cleared from the box and then not sent is marked inserted, not sent', async ($, on) => {
   const seen = fresh()
   stubs(on, THREE, null, seen)

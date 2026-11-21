@@ -870,12 +870,17 @@ async function setCollapsed($, value) {
 
 // Local usage counters (kept in the plugin's own store): how many suggestions were shown and how many were taken,
 // per tag, plus how often the model chose silence. This is how to tell, with numbers, whether the menu helps.
-async function bump($, group, tag) {
+// All counts of one event go in one read and one write: the store file is shared by every open session, and each
+// extra round trip widens the window in which two sessions overwrite each other's counts.
+async function bump($, counts) {
+  if (!counts.length) return
   try {
     const stats = (await $.store.get("stats")) || {}
-    const g = stats[group] || {}
-    g[tag] = (Number(g[tag]) || 0) + 1
-    stats[group] = g
+    for (const [group, tag] of counts) {
+      const g = stats[group] || {}
+      g[tag] = (Number(g[tag]) || 0) + 1
+      stats[group] = g
+    }
     await $.store.set("stats", stats)
   } catch (err) { /* statistics must never get in the way */ }
 }
@@ -936,14 +941,15 @@ async function addIndexes($, indexes) {
   if (!fresh.length) return false
   const parts = fresh.length === 1 ? [last[fresh[0]].text] : fresh.map((i, n) => (n + 1) + ". " + last[i].text)
   await addToDraft($, parts)
+  const counts = []
   for (const i of fresh) {
     used.add(i)
     if (counted.has(i)) continue // already counted when it was first taken
     counted.add(i)
-    await bump($, "used", last[i].tag)
-    if (last[i].text.startsWith("/")) await bump($, "slash", "used")
-    await bump($, "pos", String(i))
+    counts.push(["used", last[i].tag], ["pos", String(i)])
+    if (last[i].text.startsWith("/")) counts.push(["slash", "used"])
   }
+  await bump($, counts)
   await persist($)
   await redraw($)
   return true
@@ -1377,13 +1383,10 @@ export function register(on, options) {
     collapsed = false
     menuAt = Date.now()
     restored = false
-    if (last.length) {
-      for (const item of last) await bump($, "shown", item.tag)
-      for (const item of last) if (item.text.startsWith("/")) await bump($, "slash", "shown")
-    } else {
-      await bump($, "silent", "n")
-    }
-    if (skills) await bump($, "slash", "offered") // turns in which at least one skill was described to the model
+    const counts = last.length ? last.map((item) => ["shown", item.tag]) : [["silent", "n"]]
+    for (const item of last) if (item.text.startsWith("/")) counts.push(["slash", "shown"])
+    if (skills) counts.push(["slash", "offered"]) // turns in which at least one skill was described to the model
+    await bump($, counts)
     if (epoch !== mine) return next(e)
     await persist($)
     await redraw($)

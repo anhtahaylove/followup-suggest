@@ -906,9 +906,9 @@ function bump($, counts) {
 function usageCounts(kind, u) {
   if (!u || typeof u !== "object") return []
   const n = (k) => Number(u[k]) || 0
-  return [["model", kind + "Usage"], ["model", kind + "Out", n("output_tokens")],
-    ["model", kind + "In", n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens")],
-    ["model", kind + "Cached", n("cache_read_input_tokens")]]
+  return [["calls", kind + "Usage"], ["calls", kind + "Out", n("output_tokens")],
+    ["calls", kind + "In", n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens")],
+    ["calls", kind + "Cached", n("cache_read_input_tokens")]]
 }
 
 async function statsLine($) {
@@ -922,7 +922,7 @@ async function statsLine($) {
   const byTag = Object.keys(TAGS).map((t) => T.tags[t] + " " + (Number((s.used || {})[t]) || 0) + "/" + (Number((s.shown || {})[t]) || 0)).join(", ")
   const slash = { offered: Number((s.slash || {}).offered) || 0, shown: Number((s.slash || {}).shown) || 0, used: Number((s.slash || {}).used) || 0 }
   // What the model calls cost, from the usage each reported (counted since this was added, or since /fu reset).
-  const m = s.model || {}
+  const m = s.calls || {}
   const forks = Number(m.fork) || 0
   const reported = Number(m.forkUsage) || 0
   const haiku = Number(m.haiku) || 0
@@ -1387,7 +1387,7 @@ export function register(on, options) {
     // What a call that ran cost, from the usage it reports. It goes into the menu's single statistics write below, or,
     // when the menu is dropped on the way (stale, failed), into a write of its own in the finally block.
     // shortcut: a fork past FORK_TIMEOUT_MS still runs and is billed, but reports nothing here, so it is not counted.
-    let cost = forked && typeof forked === "object" && forked.reason !== "nothing-to-fork" ? [["model", "fork"], ["model", "forkMs", callMs], ...usageCounts("fork", usage)] : []
+    let cost = forked && typeof forked === "object" && forked.reason !== "nothing-to-fork" ? [["calls", "fork"], ["calls", "forkMs", callMs], ...usageCounts("fork", usage)] : []
     try {
       let text = forked === FORK_UNAVAILABLE ? forked : forked && forked.isAnswered ? forked.text : null
       if (epoch !== mine) return next(e) // do not start a fallback or emit notices for forgotten work
@@ -1413,7 +1413,7 @@ export function register(on, options) {
         }
         callMs = Date.now() - started
         usage = r && r.usage
-        if (r) cost.push(["model", "haiku"])
+        if (r) cost.push(["calls", "haiku"])
         if (epoch !== mine) return next(e)
         if (!r || !r.isAnswered) {
           return { text: L().modelSilent(String((r && r.reason) || L().unknownReason).slice(0, 120)) }

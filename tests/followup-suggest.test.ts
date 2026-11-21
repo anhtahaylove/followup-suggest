@@ -412,7 +412,7 @@ test('one menu and one insert-all each update the shared statistics in a single 
   expect(writes).toBe(1)
   expect((seen.store.stats as any).shown).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
   expect((seen.store.stats as any).slash).toEqual({ shown: 1, offered: 1 })
-  expect((seen.store.stats as any).model.fork).toBe(1)
+  expect((seen.store.stats as any).calls.fork).toBe(1)
   await $.command.run({ command: 'fu', args: 'all' })
   expect(writes).toBe(2)
   expect((seen.store.stats as any).used).toEqual({ NEXT: 2, VERIFY: 1, HANDOFF: 1 })
@@ -426,7 +426,7 @@ test('/fu stats reports what the menus cost: model calls, output tokens, cache s
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
   await $.turn.complete({ answer: ANSWER + ' Thêm một câu.', durationMs: 1000 })
-  const model = (seen.store.stats as any).model
+  const model = (seen.store.stats as any).calls
   expect(model.fork).toBe(2)
   expect(model.forkOut).toBe(240)
   expect(model.forkIn).toBe(20000)
@@ -444,8 +444,8 @@ test('a Haiku fallback is counted in /fu stats', async ($, on) => {
   stubs(on, null, THREE, seen)
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
-  expect((seen.store.stats as any).model.haiku).toBe(1)
-  expect((seen.store.stats as any).model.fork).toBeUndefined()
+  expect((seen.store.stats as any).calls.haiku).toBe(1)
+  expect((seen.store.stats as any).calls.fork).toBeUndefined()
   const r: any = await $.command.run({ command: 'fu', args: 'stats' })
   expect(r.text).toContain('Gọi model: 1 lần dự phòng bằng Haiku.')
 })
@@ -464,8 +464,8 @@ test('a fork whose menu went stale still counts in the cost statistics, and noth
   await pending
   expect(await band($)).not.toContain('[verify]')
   const stats = seen.store.stats as any
-  expect(stats.model.fork).toBe(1)
-  expect(stats.model.forkOut).toBe(120)
+  expect(stats.calls.fork).toBe(1)
+  expect(stats.calls.forkOut).toBe(120)
   expect(stats.shown).toBeUndefined()
   expect(stats.silent).toBeUndefined()
 })
@@ -476,7 +476,7 @@ test('a fork that reports no usage counts as a call but adds no tokens to the av
   stubs(on, THREE, null, seen)
   await start($)
   await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
-  const model = (seen.store.stats as any).model
+  const model = (seen.store.stats as any).calls
   expect(model.fork).toBe(1)
   expect(model.forkUsage).toBeUndefined()
   const r: any = await $.command.run({ command: 'fu', args: 'stats' })

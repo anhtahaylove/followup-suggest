@@ -11,6 +11,7 @@ type Seen = {
   agents?: Array<Record<string, unknown>>
   debug?: string
   fillRefused?: boolean
+  noUsage?: boolean
 }
 
 // Stubs answer in Claude Code's place, in the shape the test kit asks for per event.
@@ -65,7 +66,7 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
     seen.forkCalls += 1
     return forkText === null
       ? { value: { isAnswered: false, reason: 'nothing-to-fork' } }
-      : { value: { isAnswered: true, text: forkText, usage: { input_tokens: 10, output_tokens: 120, cache_read_input_tokens: 9800, cache_creation_input_tokens: 190 } } }
+      : { value: { isAnswered: true, text: forkText, ...(seen.noUsage ? {} : { usage: { input_tokens: 10, output_tokens: 120, cache_read_input_tokens: 9800, cache_creation_input_tokens: 190 } }) } }
   })
   on('model.complete', async (_api: unknown, e: { system: string }) => {
     seen.fallbackSystem = e.system
@@ -82,7 +83,8 @@ function stubs(on: any, forkText: string | null, haikuText: string | null, seen:
   on('prompt.change', (_api: unknown, e: { text: string }) => ({ text: e.text }))
   on('tool.call', () => ({ result: {}, text: 'ok' }))
   on('prompt.fill', (_api: unknown, e: { text: string; mode?: string }) => {
-    if (seen.fillRefused) return { isFilled: false, refusal: 'dialog' }
+    // The engine strips a refusal cause a hook writes itself, so a stub can only say the text was not taken.
+    if (seen.fillRefused) return { isFilled: false }
     seen.draft = e.mode === 'append' ? seen.draft + e.text : e.text
     seen.fills.push(e.text)
     return { isFilled: true }
@@ -431,7 +433,7 @@ test('/fu stats reports what the menus cost: model calls, output tokens, cache s
   expect(model.forkCached).toBe(19600)
   expect(Number.isFinite(model.forkMs)).toBe(true)
   const r: any = await $.command.run({ command: 'fu', args: 'stats' })
-  expect(r.text).toContain('2 menus from the session model')
+  expect(r.text).toContain('Model calls: 2 forks of your session (on average ')
   expect(r.text).toContain('120 output tokens')
   expect(r.text).toContain('98% of the input read from cache')
   expect(r.text).not.toContain('Haiku')
@@ -445,7 +447,41 @@ test('a Haiku fallback is counted in /fu stats', async ($, on) => {
   expect((seen.store.stats as any).model.haiku).toBe(1)
   expect((seen.store.stats as any).model.fork).toBeUndefined()
   const r: any = await $.command.run({ command: 'fu', args: 'stats' })
-  expect(r.text).toContain('1 menu từ Haiku')
+  expect(r.text).toContain('Gọi model: 1 lần dự phòng bằng Haiku.')
+})
+
+test('a fork whose menu went stale still counts in the cost statistics, and nothing else does', async ($, on) => {
+  const seen = blank()
+  let release: () => void = () => {}
+  seen.forkGate = new Promise<void>((resolve) => { release = resolve })
+  const forking = new Promise<void>((resolve) => { seen.forkStarted = resolve })
+  stubs(on, THREE, null, seen)
+  await start($)
+  const pending = $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  await forking
+  await $.prompt.submit({ text: 'something else entirely' }) // the user moves on while the fork is still writing
+  release()
+  await pending
+  expect(await band($)).not.toContain('[verify]')
+  const stats = seen.store.stats as any
+  expect(stats.model.fork).toBe(1)
+  expect(stats.model.forkOut).toBe(120)
+  expect(stats.shown).toBeUndefined()
+  expect(stats.silent).toBeUndefined()
+})
+
+test('a fork that reports no usage counts as a call but adds no tokens to the averages', async ($, on) => {
+  const seen = blank()
+  seen.noUsage = true
+  stubs(on, THREE, null, seen)
+  await start($)
+  await $.turn.complete({ answer: ANSWER, durationMs: 1000 })
+  const model = (seen.store.stats as any).model
+  expect(model.fork).toBe(1)
+  expect(model.forkUsage).toBeUndefined()
+  const r: any = await $.command.run({ command: 'fu', args: 'stats' })
+  expect(r.text).toContain('Model calls: 1 fork of your session (on average ')
+  expect(r.text).not.toContain('output tokens')
 })
 
 test('a row the input box refused (a dialog holds the keys) gets no check mark and counts as not used', async ($, on) => {

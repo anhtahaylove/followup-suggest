@@ -987,7 +987,7 @@ function historyNodes($, Text, Button, lineWhenClosed, cols) {
     })]
   }
   const T = L()
-  const nodes = [Text({ color: "gray", bold: true, children: [fit(T.historyHeader, cols)] })]
+  const nodes = [Text({ color: "gray", weight: "semibold", children: [fit(T.historyHeader, cols)] })]
   for (const h of history.slice(-3).reverse()) {
     const sent = h.items.filter((it) => it.state === "sent").length
     nodes.push(Text({ dimColor: true, children: [fit(T.historyEntry(new Date(h.at).toTimeString().slice(0, 5), sent, h.items.length), cols)] }))
@@ -1260,7 +1260,7 @@ export function register(on, options) {
         onPress: async () => { await addIndexes($, [i]) },
         children: [
           head,
-          Text({ color: TAG_COLORS[item.tag], bold: !used.has(i), dimColor: used.has(i), children: [chip] }),
+          Text({ color: TAG_COLORS[item.tag], weight: used.has(i) ? "regular" : "semibold", dimColor: used.has(i), children: [chip] }),
           marks + fit(item.text, cols - 3 - displayWidth(head + chip + marks)),
         ],
       })
@@ -1291,10 +1291,10 @@ export function register(on, options) {
       onPress: async () => { await setCollapsed($, true) },
     })
     const title = allDone
-      ? Text({ color: "green", bold: true, children: [fit(T.headerAllDone(last.length), cols - 4)] })
+      ? Text({ color: "green", weight: "semibold", children: [fit(T.headerAllDone(last.length), cols - 4)] })
       : restored && Date.now() - menuAt >= FRESH_MS
-        ? Text({ color: "cyan", bold: true, children: [fit(T.headerRestored(T.ago(Math.floor((Date.now() - menuAt) / 60000))), cols - 4)] })
-        : Text({ color: "cyan", bold: true, children: [fit(T.header, cols - 4)] })
+        ? Text({ color: "cyan", weight: "semibold", children: [fit(T.headerRestored(T.ago(Math.floor((Date.now() - menuAt) / 60000))), cols - 4)] })
+        : Text({ color: "cyan", weight: "semibold", children: [fit(T.header, cols - 4)] })
     // With `maxRows` too small for everything, drop the least important lines first (Hide, insert-all, title), then the last rows.
     let lines = [title, ...rows, ...all, hide]
     const cap = Number.isFinite(props.maxRows) && props.maxRows > 0 ? props.maxRows : Infinity
